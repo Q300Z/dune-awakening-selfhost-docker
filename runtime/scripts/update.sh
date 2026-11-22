@@ -23,8 +23,8 @@ AUTO_STATE_FILE="${DUNE_AUTO_UPDATE_STATE_FILE:-runtime/generated/update-auto.en
 MANUAL_STOP_FILE="runtime/generated/manual-stop.env"
 AUTO_SERVICE_NAME="dune-awakening-auto-update.service"
 AUTO_TIMER_NAME="dune-awakening-auto-update.timer"
-AUTO_SERVICE_FILE="/etc/systemd/system/$AUTO_SERVICE_NAME"
-AUTO_TIMER_FILE="/etc/systemd/system/$AUTO_TIMER_NAME"
+AUTO_SERVICE_FILE="/home/tboutin/.config/systemd/user/$AUTO_SERVICE_NAME"
+AUTO_TIMER_FILE="/home/tboutin/.config/systemd/user/$AUTO_TIMER_NAME"
 AUTO_DEFAULT_TIME="${DUNE_AUTO_UPDATE_TIME:-05:00}"
 AUTO_DEFAULT_INTERVAL_MINUTES="${DUNE_AUTO_UPDATE_INTERVAL_MINUTES:-60}"
 AUTO_PENDING_FILE="${DUNE_AUTO_UPDATE_PENDING_FILE:-runtime/generated/update-auto-pending.env}"
@@ -43,7 +43,7 @@ positive_integer_or_default() {
 }
 
 steamcmd_content_log_line_count() {
-  docker compose exec -T orchestrator sh -lc '
+  docker exec -i dune-orchestrator sh -lc '
     log=/home/dune/Steam/logs/content_log.txt
     if [ -f "$log" ]; then
       wc -l < "$log"
@@ -58,7 +58,7 @@ append_new_steamcmd_content_log() {
   local output_file="$2"
 
   [[ "$previous_lines" =~ ^[0-9]+$ ]] || previous_lines=0
-  docker compose exec -T -e PREVIOUS_LINES="$previous_lines" orchestrator sh -lc '
+  docker exec -i -e PREVIOUS_LINES="$previous_lines" dune-orchestrator sh -lc '
     log=/home/dune/Steam/logs/content_log.txt
     [ -f "$log" ] || exit 0
     current_lines="$(wc -l < "$log")"
@@ -115,7 +115,7 @@ world_game_servers_running() {
 # no Funcom token, i.e. exactly the host a system restore is for. A no-op if it
 # is already up.
 ensure_orchestrator() {
-  if docker compose ps --status running --services 2>/dev/null | grep -qx orchestrator; then
+  if docker ps --filter "name=^/dune-orchestrator$" --filter "status=running" --format '{{.Names}}' 2>/dev/null | grep -qx dune-orchestrator; then
     return 0
   fi
   echo "Starting the orchestrator container..."
@@ -299,7 +299,7 @@ require_auto_max_wait_minutes() {
 }
 
 can_manage_systemd_units() {
-  [ -d /etc/systemd/system ] && [ -w /etc/systemd/system ]
+  mkdir -p /home/tboutin/.config/systemd/user 2>/dev/null && [ -d /home/tboutin/.config/systemd/user ] && [ -w /home/tboutin/.config/systemd/user ]
 }
 
 write_auto_units_to() {
@@ -311,8 +311,8 @@ write_auto_units_to() {
   cat > "$systemd_dir/$AUTO_SERVICE_NAME" <<EOF
 [Unit]
 Description=Dune Awakening self-host auto update
-Wants=docker.service
-After=network-online.target docker.service
+Wants=podman.socket
+After=podman.socket
 
 [Service]
 Type=oneshot
@@ -345,7 +345,13 @@ docker_helper_image() {
 
 can_manage_host_systemd_with_docker() {
   command -v docker >/dev/null 2>&1 || return 1
-  [ -S /var/run/docker.sock ] || return 1
+  local sock="/run/user/${DUNE_HOST_UID:-$(id -u)}/podman/podman.sock"
+  if [ -n "${DUNE_DOCKER_SOCKET:-}" ] && [ -S "${DUNE_DOCKER_SOCKET}" ]; then
+    sock="${DUNE_DOCKER_SOCKET}"
+  elif [ ! -S "$sock" ]; then
+    sock="/var/run/docker.sock"
+  fi
+  [ -S "$sock" ] || return 1
   docker image inspect "$(docker_helper_image)" >/dev/null 2>&1 || return 1
 }
 
@@ -362,13 +368,13 @@ install_auto_units_via_docker_host() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      systemd_dir=/host/etc/systemd/system
+      systemd_dir=/host/home/tboutin/.config/systemd/user
       mkdir -p "$systemd_dir"
       cat > "$systemd_dir/dune-awakening-auto-update.service" <<EOF
 [Unit]
 Description=Dune Awakening self-host auto update
-Wants=docker.service
-After=network-online.target docker.service
+Wants=podman.socket
+After=podman.socket
 
 [Service]
 Type=oneshot
@@ -390,10 +396,10 @@ Unit=dune-awakening-auto-update.service
 [Install]
 WantedBy=timers.target
 EOF
-      chroot /host /bin/systemctl daemon-reload
-      chroot /host /bin/systemctl enable --now dune-awakening-auto-update.timer
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user enable --now dune-awakening-auto-update.timer
       # Re-arm an already-enabled, elapsed timer without stopping its service.
-      chroot /host /bin/systemctl restart dune-awakening-auto-update.timer
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user restart dune-awakening-auto-update.timer
     '
 }
 
@@ -407,11 +413,11 @@ disable_auto_units_via_docker_host() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      chroot /host /bin/systemctl disable --now dune-awakening-auto-update.timer >/dev/null 2>&1 || true
-      chroot /host /bin/systemctl stop dune-awakening-auto-update.service >/dev/null 2>&1 || true
-      rm -f /host/etc/systemd/system/dune-awakening-auto-update.service /host/etc/systemd/system/dune-awakening-auto-update.timer
-      chroot /host /bin/systemctl daemon-reload
-      chroot /host /bin/systemctl reset-failed dune-awakening-auto-update.service >/dev/null 2>&1 || true
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user disable --now dune-awakening-auto-update.timer >/dev/null 2>&1 || true
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user stop dune-awakening-auto-update.service >/dev/null 2>&1 || true
+      rm -f /host/home/tboutin/.config/systemd/user/dune-awakening-auto-update.service /host/home/tboutin/.config/systemd/user/dune-awakening-auto-update.timer
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user reset-failed dune-awakening-auto-update.service >/dev/null 2>&1 || true
     '
 }
 
@@ -433,13 +439,13 @@ show_auto_timer_status_via_docker() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      load_state="$(chroot /host /bin/systemctl show dune-awakening-auto-update.timer --property=LoadState --value 2>/dev/null || true)"
+      load_state="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user show dune-awakening-auto-update.timer --property=LoadState --value 2>/dev/null || true)"
       if [ -n "$load_state" ] && [ "$load_state" != "not-found" ]; then
-        timer_active="$(chroot /host /bin/systemctl is-active dune-awakening-auto-update.timer 2>/dev/null || true)"
+        timer_active="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user is-active dune-awakening-auto-update.timer 2>/dev/null || true)"
         if [ "$timer_active" = "active" ]; then
           echo "Systemd timer: active"
-          timer_sub_state="$(chroot /host /bin/systemctl show dune-awakening-auto-update.timer --property=SubState --value 2>/dev/null || true)"
-          service_active="$(chroot /host /bin/systemctl show dune-awakening-auto-update.service --property=ActiveState --value 2>/dev/null || true)"
+          timer_sub_state="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user show dune-awakening-auto-update.timer --property=SubState --value 2>/dev/null || true)"
+          service_active="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user show dune-awakening-auto-update.service --property=ActiveState --value 2>/dev/null || true)"
           case "$timer_sub_state:$service_active" in
             elapsed:inactive|elapsed:failed)
               echo "WARN Auto-update timer has no future check scheduled. Save Auto Game Updates again to repair it."
@@ -448,8 +454,8 @@ show_auto_timer_status_via_docker() {
         else
           echo "Systemd timer: inactive"
         fi
-        working_directory="$(chroot /host /bin/systemctl show dune-awakening-auto-update.service --property=WorkingDirectory --value 2>/dev/null || true)"
-        exec_start="$(chroot /host /bin/systemctl show dune-awakening-auto-update.service --property=ExecStart --value 2>/dev/null || true)"
+        working_directory="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user show dune-awakening-auto-update.service --property=WorkingDirectory --value 2>/dev/null || true)"
+        exec_start="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user show dune-awakening-auto-update.service --property=ExecStart --value 2>/dev/null || true)"
         if [ "$timer_active" = "active" ] && [ "$DUNE_AUTO_UPDATE_ENABLED" != "1" ]; then
           echo "WARN Auto-update timer is active while auto updates are disabled in this checkout."
         fi
@@ -469,7 +475,7 @@ show_auto_timer_status_via_docker() {
             ;;
           *) echo "WARN Auto-update service ExecStart points outside the current checkout: $DUNE_HOST_REPO_ROOT." ;;
         esac
-        chroot /host /bin/systemctl list-timers --all dune-awakening-auto-update.timer --no-pager || true
+        env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user list-timers --all dune-awakening-auto-update.timer --no-pager || true
       else
         echo "Systemd timer: not installed"
       fi
@@ -479,17 +485,17 @@ show_auto_timer_status_via_docker() {
 show_auto_timer_status() {
   local load_state timer_active timer_sub_state service_active working_directory exec_start
 
-  load_state="$(systemctl show "$AUTO_TIMER_NAME" --property=LoadState --value 2>/dev/null || true)"
+  load_state="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show "$AUTO_TIMER_NAME" --property=LoadState --value 2>/dev/null || true)"
   if [ -z "$load_state" ] || [ "$load_state" = "not-found" ]; then
     echo "Systemd timer: not installed"
     return 0
   fi
 
-  timer_active="$(systemctl is-active "$AUTO_TIMER_NAME" 2>/dev/null || true)"
+  timer_active="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user is-active "$AUTO_TIMER_NAME" 2>/dev/null || true)"
   if [ "$timer_active" = "active" ]; then
     echo "Systemd timer: active"
-    timer_sub_state="$(systemctl show "$AUTO_TIMER_NAME" --property=SubState --value 2>/dev/null || true)"
-    service_active="$(systemctl show "$AUTO_SERVICE_NAME" --property=ActiveState --value 2>/dev/null || true)"
+    timer_sub_state="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show "$AUTO_TIMER_NAME" --property=SubState --value 2>/dev/null || true)"
+    service_active="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show "$AUTO_SERVICE_NAME" --property=ActiveState --value 2>/dev/null || true)"
     case "$timer_sub_state:$service_active" in
       elapsed:inactive|elapsed:failed)
         echo "WARN Auto-update timer has no future check scheduled. Save Auto Game Updates again to repair it."
@@ -499,8 +505,8 @@ show_auto_timer_status() {
     echo "Systemd timer: inactive"
   fi
 
-  working_directory="$(systemctl show "$AUTO_SERVICE_NAME" --property=WorkingDirectory --value 2>/dev/null || true)"
-  exec_start="$(systemctl show "$AUTO_SERVICE_NAME" --property=ExecStart --value 2>/dev/null || true)"
+  working_directory="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show "$AUTO_SERVICE_NAME" --property=WorkingDirectory --value 2>/dev/null || true)"
+  exec_start="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show "$AUTO_SERVICE_NAME" --property=ExecStart --value 2>/dev/null || true)"
   if [ "$timer_active" = "active" ] && [ "${DUNE_AUTO_UPDATE_ENABLED:-0}" != "1" ]; then
     echo "WARN Auto-update timer is active while auto updates are disabled in this checkout."
   fi
@@ -520,7 +526,7 @@ show_auto_timer_status() {
       ;;
     *) echo "WARN Auto-update service ExecStart points outside the current checkout: $HOST_ROOT_DIR." ;;
   esac
-  systemctl list-timers --all "$AUTO_TIMER_NAME" --no-pager || true
+  env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user list-timers --all "$AUTO_TIMER_NAME" --no-pager || true
 }
 
 handle_auto_update() {
@@ -559,7 +565,7 @@ handle_auto_update() {
           return 0
         else
           write_auto_state 1 "$interval_minutes" "$apply_enabled" "$notify_enabled" "$notify_minutes" "$wait_empty" "$max_wait_minutes" 0 "$update_console" "$manage_tanks"
-          echo "Auto-update preference saved, but systemctl was not found and the host timer could not be installed through Docker."
+          echo "Auto-update preference saved, but env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user was not found and the host timer could not be installed through Docker."
           echo "Saved: $AUTO_STATE_FILE"
           echo "To install the timer, run this command with sudo/root:"
           echo "  runtime/scripts/update.sh auto enable $interval_minutes $apply_enabled $notify_enabled $notify_minutes $wait_empty $max_wait_minutes $update_console $manage_tanks"
@@ -584,13 +590,13 @@ handle_auto_update() {
         fi
       fi
 
-      write_auto_units_to "$interval_minutes" "/etc/systemd/system" "$HOST_ROOT_DIR"
-      systemctl daemon-reload
-      systemctl enable --now "$AUTO_TIMER_NAME"
+      write_auto_units_to "$interval_minutes" "/home/tboutin/.config/systemd/user" "$HOST_ROOT_DIR"
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user enable --now "$AUTO_TIMER_NAME"
       write_auto_state 1 "$interval_minutes" "$apply_enabled" "$notify_enabled" "$notify_minutes" "$wait_empty" "$max_wait_minutes" 1 "$update_console" "$manage_tanks"
       # enable --now does not re-arm an already-active elapsed timer. Restart
       # only the timer: a countdown or installation already running is kept.
-      systemctl restart "$AUTO_TIMER_NAME"
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user restart "$AUTO_TIMER_NAME"
 
       echo "Auto updates enabled."
       echo "Check interval: every $interval_minutes minutes"
@@ -601,11 +607,11 @@ handle_auto_update() {
       read_auto_state
       ensure_auto_state_writable
       if command -v systemctl >/dev/null 2>&1 && can_manage_systemd_units; then
-        systemctl disable --now "$AUTO_TIMER_NAME" >/dev/null 2>&1 || true
-        systemctl stop "$AUTO_SERVICE_NAME" >/dev/null 2>&1 || true
+        env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user disable --now "$AUTO_TIMER_NAME" >/dev/null 2>&1 || true
+        env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user stop "$AUTO_SERVICE_NAME" >/dev/null 2>&1 || true
         rm -f "$AUTO_SERVICE_FILE" "$AUTO_TIMER_FILE"
-        systemctl daemon-reload
-        systemctl reset-failed "$AUTO_SERVICE_NAME" >/dev/null 2>&1 || true
+        env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
+        env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user reset-failed "$AUTO_SERVICE_NAME" >/dev/null 2>&1 || true
         write_auto_state 0 "${DUNE_AUTO_UPDATE_INTERVAL_MINUTES:-$interval_minutes}" "${DUNE_AUTO_UPDATE_APPLY_ENABLED:-1}" "${DUNE_AUTO_UPDATE_NOTIFY_ENABLED:-1}" "${DUNE_AUTO_UPDATE_NOTIFY_MINUTES:-15,10,5,1}" "${DUNE_AUTO_UPDATE_WAIT_EMPTY:-0}" "${DUNE_AUTO_UPDATE_MAX_WAIT_MINUTES:-360}" 0
       elif can_manage_host_systemd_with_docker; then
         disable_auto_units_via_docker_host
@@ -1074,7 +1080,7 @@ if [ "$cmd" = "auto" ]; then
 fi
 
 if [ "$cmd" = "fix-steamcmd" ]; then
-  docker compose exec -T -e APP_ID="$APP_ID" orchestrator bash -lc '
+  docker exec -i -e APP_ID="$APP_ID" dune-orchestrator bash -lc '
 set -euo pipefail
 APP_ID="${APP_ID:-4754530}"
 MANIFEST="/srv/dune/server/steamapps/appmanifest_${APP_ID}.acf"
@@ -1089,7 +1095,7 @@ fi
 fi
 
 if [ "$cmd" = "fix-install-dir" ]; then
-  docker compose exec -T -u root orchestrator sh -lc '
+  docker exec -i -u root dune-orchestrator sh -lc '
 set -eu
 mkdir -p /srv/dune/server /srv/dune/steam /srv/dune/cache /srv/dune/generated /home/dune/.steam
 chown -R dune:dune /srv/dune /home/dune
@@ -1106,7 +1112,7 @@ echo "Dune install directories are writable."
 fi
 
 fix_steamcmd_manifest() {
-  docker compose exec -T -e APP_ID="$APP_ID" orchestrator bash -lc '
+  docker exec -i -e APP_ID="$APP_ID" dune-orchestrator bash -lc '
 set -euo pipefail
 APP_ID="${APP_ID:-4754530}"
 MANIFEST="/srv/dune/server/steamapps/appmanifest_${APP_ID}.acf"
@@ -1135,7 +1141,7 @@ if [ "$cmd" = "check" ] || [ "$cmd" = "status" ]; then
     steam_check_log="$(mktemp)"
     steam_check_content_lines="$(steamcmd_content_log_line_count)"
     set +e
-    docker compose exec -T -e APP_ID="$APP_ID" -e STEAM_CHECK_TIMEOUT_SECONDS="$steam_check_timeout" orchestrator bash -lc '
+    docker exec -i -e APP_ID="$APP_ID" -e STEAM_CHECK_TIMEOUT_SECONDS="$steam_check_timeout" dune-orchestrator bash -lc '
 set -euo pipefail
 
 STEAMCMD_SH=/srv/dune/steam/steamcmd.sh
@@ -1434,10 +1440,10 @@ if [ "$assets_only" = "1" ]; then
 fi
 
 echo "=== Check Docker volume free space ==="
-docker compose exec -T \
+docker exec -i \
   -e DUNE_MIN_FREE_GB="${DUNE_MIN_FREE_GB:-25}" \
   -e DUNE_SKIP_DISK_CHECK="${DUNE_SKIP_DISK_CHECK:-}" \
-  orchestrator dune preflight
+ dune-orchestrator dune preflight
 
 if [ "$cmd" != "install" ]; then
   if [ "$postgres_was_running" != "1" ]; then
@@ -1498,7 +1504,7 @@ while [ "$steam_attempt" -le "$steam_attempt_limit" ]; do
   steam_content_lines="$(steamcmd_content_log_line_count)"
   steam_started="$(date +%s)"
   set +e
-  docker compose exec -T -e APP_ID="$APP_ID" orchestrator dune download 2>&1 | tee "$steam_log"
+  docker exec -i -e APP_ID="$APP_ID" dune-orchestrator dune download 2>&1 | tee "$steam_log"
   steam_rc=$?
   set -e
   echo "SteamCMD attempt $steam_attempt finished in $(( $(date +%s) - steam_started ))s (exit $steam_rc)."
@@ -1650,7 +1656,7 @@ echo "=== Load updated Funcom image tarballs ==="
 # `docker load` redraws its progress with carriage returns, which strips to
 # nothing, and this is the longest phase of an install. Count the tarballs so
 # the console has something to show.
-docker compose exec -T orchestrator bash -lc '
+docker exec -i dune-orchestrator bash -lc '
 set -euo pipefail
 # A variable purely so tests/update-install-assets-test.sh can run this loop for
 # real; the orchestrator never sets it.
@@ -1669,7 +1675,7 @@ done
 # The images live only inside the orchestrator and SteamCMD's content log carries
 # no totals, so this is the one place that can measure them. A marker rather than
 # prose, matching DUNE_GAME_ASSETS_MISSING, so the console is not parsing English.
-asset_size="$(docker compose exec -T orchestrator sh -lc 'du -sh /srv/dune/server/images 2>/dev/null | cut -f1' 2>/dev/null | tr -d '[:space:]' || true)"
+asset_size="$(docker exec -i dune-orchestrator sh -lc 'du -sh /srv/dune/server/images 2>/dev/null | cut -f1' 2>/dev/null | tr -d '[:space:]' || true)"
 if [ -n "$asset_size" ]; then
   echo "DUNE_GAME_ASSETS_SIZE=${asset_size}"
 fi

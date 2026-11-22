@@ -453,8 +453,14 @@ persist_web_port() {
 }
 
 prepare_docker_socket_gid() {
-  if [ -z "${DOCKER_SOCKET_GID:-}" ] && [ -S /var/run/docker.sock ] && command -v stat >/dev/null 2>&1; then
-    DOCKER_SOCKET_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)"
+  local sock="/run/user/${DUNE_HOST_UID:-$(id -u)}/podman/podman.sock"
+  if [ -n "${DUNE_DOCKER_SOCKET:-}" ] && [ -S "${DUNE_DOCKER_SOCKET}" ]; then
+    sock="${DUNE_DOCKER_SOCKET}"
+  elif [ ! -S "$sock" ]; then
+    sock="/var/run/docker.sock"
+  fi
+  if [ -z "${DOCKER_SOCKET_GID:-}" ] && [ -S "$sock" ] && command -v stat >/dev/null 2>&1; then
+    DOCKER_SOCKET_GID="$(stat -c '%g' "$sock" 2>/dev/null || true)"
   fi
   export DOCKER_SOCKET_GID="${DOCKER_SOCKET_GID:-0}"
 }

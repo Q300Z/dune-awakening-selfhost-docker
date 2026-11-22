@@ -44,7 +44,7 @@ docker network create dune-net 2>/dev/null || true
 
 runtime/scripts/stop-postgres-container.sh
 
-docker volume create dune-postgres-data >/dev/null
+docker volume inspect dune-postgres-data >/dev/null 2>&1 || docker volume create dune-postgres-data >/dev/null
 
 docker run -d \
   "${DUNE_DOCKER_LOG_ARGS[@]}" \

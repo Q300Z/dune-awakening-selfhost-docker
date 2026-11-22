@@ -7,7 +7,7 @@ HOST_ROOT_DIR="${DUNE_HOST_REPO_ROOT:-$ROOT_DIR}"
 
 STATE_FILE="runtime/generated/shutdown-protection.env"
 SERVICE_NAME="dune-awakening-shutdown-protection.service"
-SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME"
+SERVICE_FILE="/home/tboutin/.config/systemd/user/$SERVICE_NAME"
 LOG_FILE="runtime/generated/shutdown-protection.log"
 
 usage() {
@@ -47,7 +47,7 @@ read_state() {
 }
 
 can_manage_systemd_units() {
-  [ -d /etc/systemd/system ] && [ -w /etc/systemd/system ]
+  mkdir -p /home/tboutin/.config/systemd/user 2>/dev/null && [ -d /home/tboutin/.config/systemd/user ] && [ -w /home/tboutin/.config/systemd/user ]
 }
 
 can_write_log() {
@@ -69,7 +69,13 @@ docker_helper_image() {
 
 can_manage_host_systemd_with_docker() {
   command -v docker >/dev/null 2>&1 || return 1
-  [ -S /var/run/docker.sock ] || return 1
+  local sock="/run/user/${DUNE_HOST_UID:-$(id -u)}/podman/podman.sock"
+  if [ -n "${DUNE_DOCKER_SOCKET:-}" ] && [ -S "${DUNE_DOCKER_SOCKET}" ]; then
+    sock="${DUNE_DOCKER_SOCKET}"
+  elif [ ! -S "$sock" ]; then
+    sock="/var/run/docker.sock"
+  fi
+  [ -S "$sock" ] || return 1
   docker image inspect "$(docker_helper_image)" >/dev/null 2>&1 || return 1
 }
 
@@ -83,8 +89,8 @@ unit_content() {
 Description=Dune Docker Console clean shutdown protection
 Documentation=https://github.com/Red-Blink/dune-awakening-selfhost-docker
 DefaultDependencies=no
-Wants=docker.service
-After=docker.service
+Wants=podman.socket
+After=podman.socket
 Conflicts=shutdown.target
 Before=shutdown.target reboot.target halt.target kexec.target
 
@@ -97,12 +103,12 @@ ExecStop=$exec_root/runtime/scripts/shutdown-protection.sh run-stop
 TimeoutStopSec=240
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 EOF
 }
 
 install_unit() {
-  mkdir -p /etc/systemd/system
+  mkdir -p /home/tboutin/.config/systemd/user
   unit_content "$HOST_ROOT_DIR" > "$SERVICE_FILE"
 }
 
@@ -117,11 +123,11 @@ install_unit_via_docker_host() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      systemd_dir=/host/etc/systemd/system
+      systemd_dir=/host/home/tboutin/.config/systemd/user
       mkdir -p "$systemd_dir"
       printf "%s\n" "$DUNE_SHUTDOWN_UNIT_CONTENT" > "$systemd_dir/dune-awakening-shutdown-protection.service"
-      chroot /host /bin/systemctl daemon-reload
-      chroot /host /bin/systemctl enable --now dune-awakening-shutdown-protection.service
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user enable --now dune-awakening-shutdown-protection.service
     '
 }
 
@@ -135,8 +141,8 @@ disable_unit_via_docker_host() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      chroot /host /bin/systemctl disable --now dune-awakening-shutdown-protection.service >/dev/null 2>&1 || true
-      chroot /host /bin/systemctl daemon-reload
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user disable --now dune-awakening-shutdown-protection.service >/dev/null 2>&1 || true
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
     '
 }
 
@@ -150,9 +156,9 @@ remove_unit_via_docker_host() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      chroot /host /bin/systemctl disable --now dune-awakening-shutdown-protection.service >/dev/null 2>&1 || true
-      rm -f /host/etc/systemd/system/dune-awakening-shutdown-protection.service
-      chroot /host /bin/systemctl daemon-reload
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user disable --now dune-awakening-shutdown-protection.service >/dev/null 2>&1 || true
+      rm -f /host/home/tboutin/.config/systemd/user/dune-awakening-shutdown-protection.service
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
     '
 }
 
@@ -166,9 +172,9 @@ show_host_status_via_docker() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      if chroot /host /bin/systemctl list-unit-files dune-awakening-shutdown-protection.service --no-legend --no-pager 2>/dev/null | grep -q "^dune-awakening-shutdown-protection.service"; then
-        active="$(chroot /host /bin/systemctl is-active dune-awakening-shutdown-protection.service 2>/dev/null || true)"
-        enabled="$(chroot /host /bin/systemctl is-enabled dune-awakening-shutdown-protection.service 2>/dev/null || true)"
+      if env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user list-unit-files dune-awakening-shutdown-protection.service --no-legend --no-pager 2>/dev/null | grep -q "^dune-awakening-shutdown-protection.service"; then
+        active="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user is-active dune-awakening-shutdown-protection.service 2>/dev/null || true)"
+        enabled="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user is-enabled dune-awakening-shutdown-protection.service 2>/dev/null || true)"
         echo "Systemd service:         ${active:-unknown}"
         echo "Systemd enabled:         ${enabled:-unknown}"
       else
@@ -187,7 +193,7 @@ enable_protection() {
       return 0
     fi
     write_state 0 0
-    echo "Shutdown protection could not be installed because systemctl was not found and the host service could not be installed through Docker."
+    echo "Shutdown protection could not be installed because env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user was not found and the host service could not be installed through Docker."
     echo "Run this command with sudo/root on the Linux host:"
     echo "  runtime/scripts/shutdown-protection.sh enable"
     return 1
@@ -208,8 +214,8 @@ enable_protection() {
   fi
 
   install_unit
-  systemctl daemon-reload
-  systemctl enable --now "$SERVICE_NAME"
+  env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
+  env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user enable --now "$SERVICE_NAME"
   write_state 1 1
 
   echo "Shutdown protection enabled."
@@ -227,8 +233,8 @@ refresh_protection() {
 
   if command -v systemctl >/dev/null 2>&1 && can_manage_systemd_units; then
     install_unit
-    systemctl daemon-reload
-    systemctl enable "$SERVICE_NAME"
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user enable "$SERVICE_NAME"
     echo "Shutdown protection service refreshed."
   elif install_unit_via_docker_host; then
     echo "Shutdown protection service refreshed."
@@ -244,8 +250,8 @@ disable_protection() {
   read_state
   write_state 0 "${DUNE_SHUTDOWN_PROTECTION_INSTALLED:-1}"
   if command -v systemctl >/dev/null 2>&1 && can_manage_systemd_units; then
-    systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
-    systemctl daemon-reload
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
     write_state 0 1
   elif can_manage_host_systemd_with_docker; then
     disable_unit_via_docker_host
@@ -263,9 +269,9 @@ disable_protection() {
 remove_protection() {
   write_state 0 0
   if command -v systemctl >/dev/null 2>&1 && can_manage_systemd_units; then
-    systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
     rm -f "$SERVICE_FILE"
-    systemctl daemon-reload
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
     write_state 0 0
   elif can_manage_host_systemd_with_docker; then
     remove_unit_via_docker_host
@@ -313,9 +319,9 @@ show_status() {
 
   echo
   if command -v systemctl >/dev/null 2>&1; then
-    if systemctl list-unit-files "$SERVICE_NAME" --no-legend --no-pager 2>/dev/null | grep -q "^$SERVICE_NAME"; then
-      active="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
-      enabled="$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
+    if env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user list-unit-files "$SERVICE_NAME" --no-legend --no-pager 2>/dev/null | grep -q "^$SERVICE_NAME"; then
+      active="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user is-active "$SERVICE_NAME" 2>/dev/null || true)"
+      enabled="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
       echo "Systemd service:         ${active:-unknown}"
       echo "Systemd enabled:         ${enabled:-unknown}"
     else

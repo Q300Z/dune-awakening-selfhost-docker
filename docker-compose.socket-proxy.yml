@@ -6,7 +6,7 @@ services:
   redblink-dune-docker-console:
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
-    volumes: !override
+    volumes:
       - "${DUNE_HOST_REPO_ROOT:-.}:/repo:z"
       - /etc/localtime:/etc/localtime:ro
   dune-docker-socket-proxy:
@@ -39,4 +39,4 @@ services:
       NODES: 0
       PLUGINS: 0
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - "${DUNE_DOCKER_SOCKET:-/run/user/1000/podman/podman.sock}:/var/run/docker.sock:ro"

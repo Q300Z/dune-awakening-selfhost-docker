@@ -24,10 +24,10 @@ SERVICE_NAME="dune-awakening-scheduled-restart.service"
 TIMER_NAME="dune-awakening-scheduled-restart.timer"
 WARNING_SERVICE_NAME="dune-awakening-scheduled-restart-warning.service"
 WARNING_TIMER_NAME="dune-awakening-scheduled-restart-warning.timer"
-SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME"
-TIMER_FILE="/etc/systemd/system/$TIMER_NAME"
-WARNING_SERVICE_FILE="/etc/systemd/system/$WARNING_SERVICE_NAME"
-WARNING_TIMER_FILE="/etc/systemd/system/$WARNING_TIMER_NAME"
+SERVICE_FILE="/home/tboutin/.config/systemd/user/$SERVICE_NAME"
+TIMER_FILE="/home/tboutin/.config/systemd/user/$TIMER_NAME"
+WARNING_SERVICE_FILE="/home/tboutin/.config/systemd/user/$WARNING_SERVICE_NAME"
+WARNING_TIMER_FILE="/home/tboutin/.config/systemd/user/$WARNING_TIMER_NAME"
 
 usage() {
   cat <<'EOF'
@@ -182,7 +182,7 @@ notification_time_for_restart() {
 }
 
 can_manage_systemd_units() {
-  [ -d /etc/systemd/system ] && [ -w /etc/systemd/system ]
+  mkdir -p /home/tboutin/.config/systemd/user 2>/dev/null && [ -d /home/tboutin/.config/systemd/user ] && [ -w /home/tboutin/.config/systemd/user ]
 }
 
 write_units_to() {
@@ -196,13 +196,11 @@ write_units_to() {
   cat > "$systemd_dir/$SERVICE_NAME" <<EOF
 [Unit]
 Description=Dune Awakening scheduled battlegroup restart
-Wants=docker.service
-After=network-online.target docker.service
+Wants=podman.socket
+After=podman.socket
 
 [Service]
 Type=oneshot
-User=$HOST_SERVICE_UID
-Group=$HOST_SERVICE_GID
 WorkingDirectory=$exec_root
 TimeoutStartSec=0
 ExecStart=$exec_root/runtime/scripts/restart-schedule.sh run-now
@@ -211,13 +209,11 @@ EOF
   cat > "$systemd_dir/$WARNING_SERVICE_NAME" <<EOF
 [Unit]
 Description=Dune Awakening scheduled restart warning
-Wants=docker.service
-After=network-online.target docker.service
+Wants=podman.socket
+After=podman.socket
 
 [Service]
 Type=oneshot
-User=$HOST_SERVICE_UID
-Group=$HOST_SERVICE_GID
 WorkingDirectory=$exec_root
 ExecStart=$exec_root/runtime/scripts/restart-schedule.sh notify-now $notify_minutes
 EOF
@@ -252,7 +248,7 @@ EOF
 }
 
 install_units() {
-  write_units_to "$1" "$2" "$3" "/etc/systemd/system" "$HOST_ROOT_DIR"
+  write_units_to "$1" "$2" "$3" "/home/tboutin/.config/systemd/user" "$HOST_ROOT_DIR"
 }
 
 docker_helper_image() {
@@ -261,7 +257,13 @@ docker_helper_image() {
 
 can_manage_host_systemd_with_docker() {
   command -v docker >/dev/null 2>&1 || return 1
-  [ -S /var/run/docker.sock ] || return 1
+  local sock="/run/user/${DUNE_HOST_UID:-$(id -u)}/podman/podman.sock"
+  if [ -n "${DUNE_DOCKER_SOCKET:-}" ] && [ -S "${DUNE_DOCKER_SOCKET}" ]; then
+    sock="${DUNE_DOCKER_SOCKET}"
+  elif [ ! -S "$sock" ]; then
+    sock="/var/run/docker.sock"
+  fi
+  [ -S "$sock" ] || return 1
   docker image inspect "$(docker_helper_image)" >/dev/null 2>&1 || return 1
 }
 
@@ -284,18 +286,16 @@ install_units_via_docker_host() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      systemd_dir=/host/etc/systemd/system
+      systemd_dir=/host/home/tboutin/.config/systemd/user
       mkdir -p "$systemd_dir"
       cat > "$systemd_dir/dune-awakening-scheduled-restart.service" <<EOF
 [Unit]
 Description=Dune Awakening scheduled battlegroup restart
-Wants=docker.service
-After=network-online.target docker.service
+Wants=podman.socket
+After=podman.socket
 
 [Service]
 Type=oneshot
-User=${DUNE_HOST_SERVICE_UID}
-Group=${DUNE_HOST_SERVICE_GID}
 WorkingDirectory=${DUNE_HOST_REPO_ROOT}
 TimeoutStartSec=0
 ExecStart=${DUNE_HOST_REPO_ROOT}/runtime/scripts/restart-schedule.sh run-now
@@ -303,13 +303,11 @@ EOF
       cat > "$systemd_dir/dune-awakening-scheduled-restart-warning.service" <<EOF
 [Unit]
 Description=Dune Awakening scheduled restart warning
-Wants=docker.service
-After=network-online.target docker.service
+Wants=podman.socket
+After=podman.socket
 
 [Service]
 Type=oneshot
-User=${DUNE_HOST_SERVICE_UID}
-Group=${DUNE_HOST_SERVICE_GID}
 WorkingDirectory=${DUNE_HOST_REPO_ROOT}
 ExecStart=${DUNE_HOST_REPO_ROOT}/runtime/scripts/restart-schedule.sh notify-now ${DUNE_SCHEDULED_RESTART_NOTIFY_MINUTES}
 EOF
@@ -339,9 +337,9 @@ Unit=dune-awakening-scheduled-restart-warning.service
 [Install]
 WantedBy=timers.target
 EOF
-      chroot /host /bin/systemctl daemon-reload
-      chroot /host /bin/systemctl enable --now dune-awakening-scheduled-restart.timer
-      chroot /host /bin/systemctl enable --now dune-awakening-scheduled-restart-warning.timer
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user enable --now dune-awakening-scheduled-restart.timer
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user enable --now dune-awakening-scheduled-restart-warning.timer
     '
 }
 
@@ -355,9 +353,9 @@ disable_units_via_docker_host() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      chroot /host /bin/systemctl disable --now dune-awakening-scheduled-restart.timer >/dev/null 2>&1 || true
-      chroot /host /bin/systemctl disable --now dune-awakening-scheduled-restart-warning.timer >/dev/null 2>&1 || true
-      chroot /host /bin/systemctl daemon-reload
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user disable --now dune-awakening-scheduled-restart.timer >/dev/null 2>&1 || true
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user disable --now dune-awakening-scheduled-restart-warning.timer >/dev/null 2>&1 || true
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
     '
 }
 
@@ -371,14 +369,14 @@ show_host_timer_status_via_docker() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      if chroot /host /bin/systemctl list-unit-files dune-awakening-scheduled-restart.timer --no-legend --no-pager 2>/dev/null | grep -q "^dune-awakening-scheduled-restart.timer"; then
-        timer_active="$(chroot /host /bin/systemctl is-active dune-awakening-scheduled-restart.timer 2>/dev/null || true)"
+      if env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user list-unit-files dune-awakening-scheduled-restart.timer --no-legend --no-pager 2>/dev/null | grep -q "^dune-awakening-scheduled-restart.timer"; then
+        timer_active="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user is-active dune-awakening-scheduled-restart.timer 2>/dev/null || true)"
         if [ "$timer_active" = "active" ]; then
           echo "Systemd timer:           active"
         else
           echo "Systemd timer:           inactive"
         fi
-        chroot /host /bin/systemctl list-timers --all dune-awakening-scheduled-restart.timer --no-pager || true
+        env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user list-timers --all dune-awakening-scheduled-restart.timer --no-pager || true
       else
         echo "Systemd timer:           not installed"
       fi
@@ -404,7 +402,7 @@ enable_schedule() {
       echo "Timer: $TIMER_NAME"
       return 0
     else
-      echo "Scheduled restart preference saved, but systemctl was not found and the host timer could not be installed through Docker."
+      echo "Scheduled restart preference saved, but env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user was not found and the host timer could not be installed through Docker."
       echo "Saved: $STATE_FILE"
       echo "To install the timer, run this command with sudo/root:"
       echo "  runtime/scripts/restart-schedule.sh enable $restart_time $notify_minutes"
@@ -431,9 +429,9 @@ enable_schedule() {
   fi
 
   install_units "$restart_time" "$notify_minutes" "$notify_time"
-  systemctl daemon-reload
-  systemctl enable --now "$TIMER_NAME"
-  systemctl enable --now "$WARNING_TIMER_NAME"
+  env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
+  env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user enable --now "$TIMER_NAME"
+  env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user enable --now "$WARNING_TIMER_NAME"
   write_state 1 "$restart_time" 1 "$notify_minutes" "$notify_time"
 
   echo "Scheduled restart enabled."
@@ -446,9 +444,9 @@ enable_schedule() {
 disable_schedule() {
   read_state
   if command -v systemctl >/dev/null 2>&1 && can_manage_systemd_units; then
-    systemctl disable --now "$TIMER_NAME" >/dev/null 2>&1 || true
-    systemctl disable --now "$WARNING_TIMER_NAME" >/dev/null 2>&1 || true
-    systemctl daemon-reload
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user disable --now "$TIMER_NAME" >/dev/null 2>&1 || true
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user disable --now "$WARNING_TIMER_NAME" >/dev/null 2>&1 || true
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
     write_state 0 "${DUNE_SCHEDULED_RESTART_TIME:-}" 1 "${DUNE_SCHEDULED_RESTART_NOTIFY_MINUTES:-15}" "${DUNE_SCHEDULED_RESTART_NOTIFY_TIME:-}"
   elif can_manage_host_systemd_with_docker; then
     disable_units_via_docker_host
@@ -496,14 +494,14 @@ show_status() {
 
   if command -v systemctl >/dev/null 2>&1; then
     echo
-    if systemctl list-unit-files "$TIMER_NAME" --no-legend --no-pager 2>/dev/null | grep -q "^$TIMER_NAME"; then
-      timer_active="$(systemctl is-active "$TIMER_NAME" 2>/dev/null || true)"
+    if env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user list-unit-files "$TIMER_NAME" --no-legend --no-pager 2>/dev/null | grep -q "^$TIMER_NAME"; then
+      timer_active="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user is-active "$TIMER_NAME" 2>/dev/null || true)"
       if [ "$timer_active" = "active" ]; then
         echo "Systemd timer:           active"
       else
         echo "Systemd timer:           inactive"
       fi
-      systemctl list-timers --all "$TIMER_NAME" --no-pager || true
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user list-timers --all "$TIMER_NAME" --no-pager || true
     else
       echo "Systemd timer:           not installed"
     fi

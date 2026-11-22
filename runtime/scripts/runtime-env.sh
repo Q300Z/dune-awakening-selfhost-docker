@@ -20,6 +20,63 @@ if [ -z "${DUNE_COMPOSE_PROJECT_NAME:-}" ]; then
 fi
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$DUNE_COMPOSE_PROJECT_NAME}"
 
+# Supprimer le message externe de podman-compose sous Podman rootless.
+export PODMAN_COMPOSE_WARNING_LOGS="${PODMAN_COMPOSE_WARNING_LOGS:-false}"
+
+dune_is_rootless_podman() {
+  if [ "${DUNE_ROOTLESS_PODMAN:-}" = "1" ]; then
+    return 0
+  fi
+  if [ "${DUNE_ROOTLESS_PODMAN:-}" = "0" ]; then
+    return 1
+  fi
+  if [ -f /run/.containerenv ] && grep -q '^rootless=1' /run/.containerenv 2>/dev/null; then
+    return 0
+  fi
+  local _docker_host="${DOCKER_HOST:-}"
+  local sock_hint="${DUNE_DOCKER_SOCKET:-${_docker_host#unix://}}"
+  case "$sock_hint" in
+    *podman.sock) return 0 ;;
+  esac
+  if command -v podman >/dev/null 2>&1; then
+    local docker_bin
+    docker_bin="$(command -v docker 2>/dev/null || true)"
+    if [ -n "$docker_bin" ] && grep -q '/usr/bin/podman' "$docker_bin" 2>/dev/null; then
+      if podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null | grep -qx 'true'; then
+        return 0
+      fi
+    fi
+  fi
+  return 1
+}
+
+dune_docker_socket_path() {
+  if [ -n "${DUNE_DOCKER_SOCKET:-}" ] && [ -S "${DUNE_DOCKER_SOCKET}" ]; then
+    printf '%s\n' "${DUNE_DOCKER_SOCKET}"
+    return 0
+  fi
+  case "${DOCKER_HOST:-}" in
+    unix://*)
+      local host_sock="${DOCKER_HOST#unix://}"
+      if [ -S "$host_sock" ]; then
+        printf '%s\n' "$host_sock"
+        return 0
+      fi
+      ;;
+  esac
+  local uid="${DUNE_HOST_UID:-$(id -u)}"
+  local podman_sock="/run/user/${uid}/podman/podman.sock"
+  if [ -S "$podman_sock" ]; then
+    printf '%s\n' "$podman_sock"
+    return 0
+  fi
+  if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/podman/podman.sock" ]; then
+    printf '%s\n' "${XDG_RUNTIME_DIR}/podman/podman.sock"
+    return 0
+  fi
+  printf '%s\n' "/var/run/docker.sock"
+}
+
 # Keep Docker's json-file logs bounded. These arguments are shared by every
 # container created directly by the runtime scripts.
 DUNE_DOCKER_LOG_MAX_SIZE="${DUNE_DOCKER_LOG_MAX_SIZE:-50m}"
@@ -32,12 +89,20 @@ if ! printf '%s' "$DUNE_DOCKER_LOG_MAX_FILES" | grep -Eq '^[1-9][0-9]*$'; then
   echo "Invalid DUNE_DOCKER_LOG_MAX_FILES=$DUNE_DOCKER_LOG_MAX_FILES; expected a positive integer." >&2
   return 1
 fi
+# Podman 6.2.0 ignore --log-opt max-file sous json-file ; on l'omet en rootless Podman.
 # shellcheck disable=SC2034 # Consumed by scripts that source this file.
-DUNE_DOCKER_LOG_ARGS=(
-  --log-driver json-file
-  --log-opt "max-size=$DUNE_DOCKER_LOG_MAX_SIZE"
-  --log-opt "max-file=$DUNE_DOCKER_LOG_MAX_FILES"
-)
+if dune_is_rootless_podman; then
+  DUNE_DOCKER_LOG_ARGS=(
+    --log-driver json-file
+    --log-opt "max-size=$DUNE_DOCKER_LOG_MAX_SIZE"
+  )
+else
+  DUNE_DOCKER_LOG_ARGS=(
+    --log-driver json-file
+    --log-opt "max-size=$DUNE_DOCKER_LOG_MAX_SIZE"
+    --log-opt "max-file=$DUNE_DOCKER_LOG_MAX_FILES"
+  )
+fi
 
 value_is_known() {
   local value="${1:-}"

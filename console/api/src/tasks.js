@@ -418,25 +418,34 @@ export function buildSelfUpdateHelperDockerArgs({
   hostGid = "0",
   dockerSocketGid = "0",
   extraEnv = [],
-  command
+  command,
+  rootlessPodman = process.env.DUNE_ROOTLESS_PODMAN === "1",
+  dockerSocketPath = process.env.DUNE_DOCKER_SOCKET || "/var/run/docker.sock"
 }) {
+  const runUser = rootlessPodman ? "0:0" : `${hostUid}:${hostGid}`;
+  const groupAddArgs = rootlessPodman ? [] : ["--group-add", dockerSocketGid];
+  const hostSocket = rootlessPodman ? dockerSocketPath : "/var/run/docker.sock";
+  const podmanEnvArgs = rootlessPodman
+    ? ["-e", "DUNE_ROOTLESS_PODMAN=1", "-e", `DUNE_DOCKER_SOCKET=${hostSocket}`]
+    : [];
   return [
       "run",
       "--rm",
       "-d",
       "--name", helperName,
       "--label", "io.github.red-blink.dune-selfhost.role=self-update-helper",
-      "--user", `${hostUid}:${hostGid}`,
-      "--group-add", dockerSocketGid,
+      "--user", runUser,
+      ...groupAddArgs,
       "--network", "host",
       "-v", `${hostRepoRoot}:/repo`,
-      "-v", "/var/run/docker.sock:/var/run/docker.sock",
+      "-v", `${hostSocket}:/var/run/docker.sock`,
       "-e", `DUNE_HOST_REPO_ROOT=${hostRepoRoot}`,
       "-e", `COMPOSE_PROJECT_NAME=${composeProjectName}`,
       "-e", `DUNE_COMPOSE_PROJECT_NAME=${composeProjectName}`,
       "-e", `DUNE_HOST_UID=${hostUid}`,
       "-e", `DUNE_HOST_GID=${hostGid}`,
       "-e", `DOCKER_SOCKET_GID=${dockerSocketGid}`,
+      ...podmanEnvArgs,
       ...extraEnv.flatMap((value) => ["-e", value]),
       "-w", "/repo",
       "--entrypoint", "/bin/sh",

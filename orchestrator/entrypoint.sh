@@ -40,14 +40,15 @@ if [ -z "${DOCKER_SOCKET_GID:-}" ] && [ -S /var/run/docker.sock ] && command -v 
   DOCKER_SOCKET_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo '')"
 fi
 
-if [ -n "${DOCKER_SOCKET_GID:-}" ] && [ "${DOCKER_SOCKET_GID}" != "0" ]; then
-  SOCK_GROUP="docker-socket-gid-${DOCKER_SOCKET_GID}"
-  if ! getent group "$SOCK_GROUP" >/dev/null 2>&1; then
-    groupadd -g "$DOCKER_SOCKET_GID" "$SOCK_GROUP" 2>/dev/null || true
+if [ -n "${DOCKER_SOCKET_GID:-}" ]; then
+  socket_group="$(getent group "$DOCKER_SOCKET_GID" | cut -d: -f1 || true)"
+  if [ -z "$socket_group" ]; then
+    socket_group="docker-socket-gid-${DOCKER_SOCKET_GID}"
+    groupadd -g "$DOCKER_SOCKET_GID" "$socket_group" 2>/dev/null || true
   fi
-  if getent group "$SOCK_GROUP" >/dev/null 2>&1; then
-    usermod -aG "$SOCK_GROUP" dune 2>/dev/null || true
-    echo "[entrypoint] Added dune to group $SOCK_GROUP (GID=$DOCKER_SOCKET_GID) for Docker socket access"
+  if getent group "$socket_group" >/dev/null 2>&1; then
+    usermod -aG "$socket_group" dune 2>/dev/null || true
+    echo "[entrypoint] Added dune to group $socket_group (GID=$DOCKER_SOCKET_GID) for Docker socket access"
   fi
 fi
 

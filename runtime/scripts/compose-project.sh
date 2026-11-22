@@ -47,7 +47,6 @@ dune_compose_service_projects() {
   docker ps -a \
     --filter "label=com.docker.compose.service=$dune_compose_service" \
     --filter "label=com.docker.compose.container-number" \
-    --filter "label=com.docker.compose.oneoff=False" \
     --format '{{.ID}}' 2>/dev/null \
     | while IFS= read -r dune_compose_container_id; do
         [ -n "$dune_compose_container_id" ] || continue
@@ -69,7 +68,6 @@ dune_compose_running_service_container() {
     --filter "label=com.docker.compose.project=$dune_compose_project" \
     --filter "label=com.docker.compose.service=$dune_compose_service" \
     --filter "label=com.docker.compose.container-number" \
-    --filter "label=com.docker.compose.oneoff=False" \
     --format '{{.Names}}' 2>/dev/null || true)"
   [ "$(printf '%s\n' "$dune_compose_containers" | awk 'NF { count++ } END { print count + 0 }')" = "1" ] \
     || return 1

@@ -501,8 +501,14 @@ echo "  $BATTLEGROUP_ID"
 
 echo
 echo "Starting orchestrator container..."
-if [ -z "${DOCKER_SOCKET_GID:-}" ] && [ -S /var/run/docker.sock ] && command -v stat >/dev/null 2>&1; then
-  export DOCKER_SOCKET_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)"
+_init_sock="/run/user/${DUNE_HOST_UID:-$(id -u)}/podman/podman.sock"
+if [ -n "${DUNE_DOCKER_SOCKET:-}" ] && [ -S "${DUNE_DOCKER_SOCKET}" ]; then
+  _init_sock="${DUNE_DOCKER_SOCKET}"
+elif [ ! -S "$_init_sock" ]; then
+  _init_sock="/var/run/docker.sock"
+fi
+if [ -z "${DOCKER_SOCKET_GID:-}" ] && [ -S "$_init_sock" ] && command -v stat >/dev/null 2>&1; then
+  export DOCKER_SOCKET_GID="$(stat -c '%g' "$_init_sock" 2>/dev/null || true)"
 fi
 export DOCKER_SOCKET_GID="${DOCKER_SOCKET_GID:-0}"
 if [ -z "${DUNE_HOST_UID:-}" ]; then

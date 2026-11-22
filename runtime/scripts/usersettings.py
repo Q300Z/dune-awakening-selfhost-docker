@@ -19,6 +19,17 @@ SIETCH_CONFIG_PATH = Path(os.environ.get("DUNE_SIETCH_CONFIG", str(ROOT / "runti
 LANDSRAAD_RESTART_MARKER_PATH = Path(os.environ.get("DUNE_LANDSRAAD_RESTART_MARKER", str(ROOT / "runtime" / "generated" / "landsraad-restart-required")))
 PRIVATE_SETTINGS_MODE = 0o600
 
+def _open_lock_file(lock_path: Path):
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o666)
+        try:
+            os.fchmod(fd, 0o666)
+        except OSError:
+            pass
+        return os.fdopen(fd, "r+")
+    except PermissionError:
+        return lock_path.open("r")
+
 
 def configured_host_owner() -> tuple[int, int] | None:
     """Return the non-root account that should own host-managed files."""
@@ -60,6 +71,8 @@ def configured_host_owner() -> tuple[int, int] | None:
 def apply_host_ownership(path: Path) -> None:
     """Prevent root maintenance jobs from leaving host files root-owned."""
     if os.geteuid() != 0:
+        return
+    if os.environ.get("DUNE_ROOTLESS_PODMAN") == "1" or (Path("/run/.containerenv").exists() and "rootless=1" in Path("/run/.containerenv").read_text(errors="ignore")):
         return
     owner = configured_host_owner()
     if owner is not None:
@@ -1823,10 +1836,9 @@ def read_ini_array_key_present(path: Path, section: str, keys: set[str]) -> bool
 def update_ini_key(path: Path, section: str, key: str, value: str, append_prefix: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
-    lock_path.touch(exist_ok=True)
     import fcntl
 
-    with lock_path.open("r+") as lock_file:
+    with _open_lock_file(lock_path) as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         if path.exists():
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -1876,8 +1888,7 @@ def remove_ini_array_key(path: Path, section: str, key: str) -> None:
     import fcntl
 
     lock_path = path.with_suffix(path.suffix + ".lock")
-    lock_path.touch(exist_ok=True)
-    with lock_path.open("r+") as lock_file:
+    with _open_lock_file(lock_path) as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         current_section = None
@@ -1902,8 +1913,7 @@ def remove_ini_key(path: Path, section: str, key: str) -> None:
     import fcntl
 
     lock_path = path.with_suffix(path.suffix + ".lock")
-    lock_path.touch(exist_ok=True)
-    with lock_path.open("r+") as lock_file:
+    with _open_lock_file(lock_path) as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         current_section = None

@@ -33,6 +33,9 @@ dune_set_host_path_owner() {
 
   [ -e "$path" ] || [ -L "$path" ] || return 0
   [ "$(id -u)" = "0" ] || return 0
+  if [ "${DUNE_ROOTLESS_PODMAN:-}" = "1" ] || { [ -f /run/.containerenv ] && grep -q "^rootless=1" /run/.containerenv 2>/dev/null; }; then
+    return 0
+  fi
   owner="$(dune_resolve_host_owner)"
   target_uid="${owner%%:*}"
   target_gid="${owner#*:}"

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PODMAN_COMPOSE_WARNING_LOGS="${PODMAN_COMPOSE_WARNING_LOGS:-false}"
+
 cd "$(dirname "$0")/../.."
 
 . runtime/scripts/compose-project.sh
@@ -76,9 +78,36 @@ persist_env_value() {
   mv "$tmp_file" "$env_file"
 }
 
+_dune_resolve_docker_socket() {
+  if declare -F dune_docker_socket_path >/dev/null 2>&1; then
+    dune_docker_socket_path
+    return 0
+  fi
+  if [ -n "${DUNE_DOCKER_SOCKET:-}" ] && [ -S "${DUNE_DOCKER_SOCKET}" ]; then
+    printf '%s\n' "${DUNE_DOCKER_SOCKET}"
+    return 0
+  fi
+  case "${DOCKER_HOST:-}" in
+    unix://*)
+      if [ -S "${DOCKER_HOST#unix://}" ]; then
+        printf '%s\n' "${DOCKER_HOST#unix://}"
+        return 0
+      fi
+      ;;
+  esac
+  local podman_sock="/run/user/${DUNE_HOST_UID:-$(id -u)}/podman/podman.sock"
+  if [ -S "$podman_sock" ]; then
+    printf '%s\n' "$podman_sock"
+    return 0
+  fi
+  printf '%s\n' "/var/run/docker.sock"
+}
+
 prepare_docker_socket_gid() {
-  if [ -z "${DOCKER_SOCKET_GID:-}" ] && [ -S /var/run/docker.sock ] && command -v stat >/dev/null 2>&1; then
-    DOCKER_SOCKET_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)"
+  local docker_sock
+  docker_sock="$(_dune_resolve_docker_socket)"
+  if [ -z "${DOCKER_SOCKET_GID:-}" ] && [ -S "$docker_sock" ] && command -v stat >/dev/null 2>&1; then
+    DOCKER_SOCKET_GID="$(stat -c '%g' "$docker_sock" 2>/dev/null || true)"
   fi
   export DOCKER_SOCKET_GID="${DOCKER_SOCKET_GID:-0}"
   persist_env_value DOCKER_SOCKET_GID "$DOCKER_SOCKET_GID"

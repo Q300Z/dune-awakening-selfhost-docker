@@ -1290,6 +1290,9 @@ normalize_host_owner_env() {
 
 run_update_as_host_owner() {
   normalize_host_owner_env
+  if [ "${DUNE_ROOTLESS_PODMAN:-0}" = "1" ] || { [ -f /run/.containerenv ] && grep -q '^rootless=1' /run/.containerenv 2>/dev/null; }; then
+    return 0
+  fi
   [ "$(id -u)" = "0" ] && [ "$DUNE_HOST_UID" != "0" ] || return 0
 
   # Older automatic-update units run as root. Drop privileges before creating
@@ -1326,6 +1329,9 @@ PY
 }
 
 restore_local_state_ownership() {
+  if [ "${DUNE_ROOTLESS_PODMAN:-0}" = "1" ] || { [ -f /run/.containerenv ] && grep -q '^rootless=1' /run/.containerenv 2>/dev/null; }; then
+    return 0
+  fi
   [ -n "${DUNE_HOST_UID:-}" ] || return 0
   [ -n "${DUNE_HOST_GID:-}" ] || return 0
   [ "$DUNE_HOST_UID" != "0" ] || return 0
@@ -1386,8 +1392,14 @@ prepare_docker_socket_gid() {
   if [ -z "${DOCKER_SOCKET_GID:-}" ]; then
     DOCKER_SOCKET_GID="$(running_console_env_value DOCKER_SOCKET_GID 2>/dev/null || true)"
   fi
-  if [ -z "${DOCKER_SOCKET_GID:-}" ] && [ -S /var/run/docker.sock ] && command -v stat >/dev/null 2>&1; then
-    DOCKER_SOCKET_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)"
+  local _su_sock="/run/user/${DUNE_HOST_UID:-$(id -u)}/podman/podman.sock"
+  if [ -n "${DUNE_DOCKER_SOCKET:-}" ] && [ -S "${DUNE_DOCKER_SOCKET}" ]; then
+    _su_sock="${DUNE_DOCKER_SOCKET}"
+  elif [ ! -S "$_su_sock" ]; then
+    _su_sock="/var/run/docker.sock"
+  fi
+  if [ -z "${DOCKER_SOCKET_GID:-}" ] && [ -S "$_su_sock" ] && command -v stat >/dev/null 2>&1; then
+    DOCKER_SOCKET_GID="$(stat -c '%g' "$_su_sock" 2>/dev/null || true)"
   fi
   export DOCKER_SOCKET_GID="${DOCKER_SOCKET_GID:-0}"
   persist_env_file_value DOCKER_SOCKET_GID "$DOCKER_SOCKET_GID"
@@ -1460,23 +1472,53 @@ rebuild_web_console_with_helper() {
 
   prepare_web_console_rebuild_env
 
-  docker run --rm -d \
-    --name "$helper_name" \
-    --user "${DUNE_HOST_UID:-0}:${DUNE_HOST_GID:-0}" \
-    --group-add "${DOCKER_SOCKET_GID:-0}" \
-    --network host \
-    -v "$HOST_ROOT_DIR:/repo" \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -e "DUNE_HOST_REPO_ROOT=$HOST_ROOT_DIR" \
-    -e "COMPOSE_PROJECT_NAME=$compose_project" \
-    -e "DUNE_COMPOSE_PROJECT_NAME=$compose_project" \
-    -e "DUNE_HOST_UID=${DUNE_HOST_UID:-0}" \
-    -e "DUNE_HOST_GID=${DUNE_HOST_GID:-0}" \
-    -e "DOCKER_SOCKET_GID=${DOCKER_SOCKET_GID:-0}" \
-    -e "DUNE_SELF_UPDATE_BUILD_TIMEOUT_SECONDS=$(self_update_build_timeout_seconds)" \
-    -w /repo \
-    "$helper_image" \
-    sh -lc "sleep 2; runtime/scripts/self-update.sh rebuild-web-console '$service' >> runtime/generated/web-console-rebuild.log 2>&1"
+  local host_docker_sock="${DUNE_DOCKER_SOCKET:-}"
+  if [ -z "$host_docker_sock" ]; then
+    local _podman_sock="/run/user/${DUNE_HOST_UID:-$(id -u)}/podman/podman.sock"
+    if [ -S "$_podman_sock" ]; then
+      host_docker_sock="$_podman_sock"
+    else
+      host_docker_sock="/var/run/docker.sock"
+    fi
+  fi
+  if [ "${DUNE_ROOTLESS_PODMAN:-0}" = "1" ] || { [ -f /run/.containerenv ] && grep -q '^rootless=1' /run/.containerenv 2>/dev/null; }; then
+    docker run --rm -d \
+      --name "$helper_name" \
+      --user 0:0 \
+      --network host \
+      -v "$HOST_ROOT_DIR:/repo" \
+      -v "$host_docker_sock:/var/run/docker.sock" \
+      -e "DUNE_HOST_REPO_ROOT=$HOST_ROOT_DIR" \
+      -e "COMPOSE_PROJECT_NAME=$compose_project" \
+      -e "DUNE_COMPOSE_PROJECT_NAME=$compose_project" \
+      -e "DUNE_HOST_UID=${DUNE_HOST_UID:-0}" \
+      -e "DUNE_HOST_GID=${DUNE_HOST_GID:-0}" \
+      -e "DOCKER_SOCKET_GID=${DOCKER_SOCKET_GID:-0}" \
+      -e "DUNE_ROOTLESS_PODMAN=1" \
+      -e "DUNE_DOCKER_SOCKET=$host_docker_sock" \
+      -e "DUNE_SELF_UPDATE_BUILD_TIMEOUT_SECONDS=$(self_update_build_timeout_seconds)" \
+      -w /repo \
+      "$helper_image" \
+      sh -lc "sleep 2; runtime/scripts/self-update.sh rebuild-web-console '$service' >> runtime/generated/web-console-rebuild.log 2>&1"
+  else
+    docker run --rm -d \
+      --name "$helper_name" \
+      --user "${DUNE_HOST_UID:-0}:${DUNE_HOST_GID:-0}" \
+      --group-add "${DOCKER_SOCKET_GID:-0}" \
+      --network host \
+      -v "$HOST_ROOT_DIR:/repo" \
+      -v "$host_docker_sock:/var/run/docker.sock" \
+      -e "DUNE_HOST_REPO_ROOT=$HOST_ROOT_DIR" \
+      -e "COMPOSE_PROJECT_NAME=$compose_project" \
+      -e "DUNE_COMPOSE_PROJECT_NAME=$compose_project" \
+      -e "DUNE_HOST_UID=${DUNE_HOST_UID:-0}" \
+      -e "DUNE_HOST_GID=${DUNE_HOST_GID:-0}" \
+      -e "DOCKER_SOCKET_GID=${DOCKER_SOCKET_GID:-0}" \
+      -e "DUNE_SELF_UPDATE_BUILD_TIMEOUT_SECONDS=$(self_update_build_timeout_seconds)" \
+      -w /repo \
+      "$helper_image" \
+      sh -lc "sleep 2; runtime/scripts/self-update.sh rebuild-web-console '$service' >> runtime/generated/web-console-rebuild.log 2>&1"
+  fi
 }
 
 rebuild_web_console_after_update() {

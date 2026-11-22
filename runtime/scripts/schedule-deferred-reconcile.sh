@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
+[ -r ./.env ] && { set -a; . ./.env; set +a; }
+
 # Starts the deferred dimension reconcile so that it OUTLIVES the console.
 #
 # It used to be a background job of start-all.sh, which the console runs inside
@@ -51,12 +53,36 @@ fi
 # spawning the same partition twice.
 docker rm -f "$HELPER_NAME" >/dev/null 2>&1 || true
 
+is_rootless_podman=0
+if [ "${DUNE_ROOTLESS_PODMAN:-}" = "1" ]; then
+  is_rootless_podman=1
+elif [ "${DUNE_ROOTLESS_PODMAN:-}" = "0" ]; then
+  is_rootless_podman=0
+elif [ -f /run/.containerenv ] && grep -q '^rootless=1' /run/.containerenv 2>/dev/null; then
+  is_rootless_podman=1
+elif command -v podman >/dev/null 2>&1; then
+  _docker_bin="$(command -v docker 2>/dev/null || true)"
+  if [ -n "$_docker_bin" ] && grep -q '/usr/bin/podman' "$_docker_bin" 2>/dev/null; then
+    if podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null | grep -qx 'true'; then
+      is_rootless_podman=1
+    fi
+  fi
+fi
+host_docker_sock="${DUNE_DOCKER_SOCKET:-/var/run/docker.sock}"
+run_user_args=(--user "${DUNE_HOST_UID:-0}:${DUNE_HOST_GID:-0}" --group-add "${DOCKER_SOCKET_GID:-0}")
+if [ "$is_rootless_podman" = "1" ]; then
+  run_user_args=(--user 0:0)
+  if [ -z "${DUNE_DOCKER_SOCKET:-}" ]; then
+    _podman_sock="/run/user/${DUNE_HOST_UID:-$(id -u)}/podman/podman.sock"
+    [ -S "$_podman_sock" ] && host_docker_sock="$_podman_sock"
+  fi
+fi
+
 if ! docker run -d --rm --name "$HELPER_NAME" \
   --network host \
-  --user "${DUNE_HOST_UID:-0}:${DUNE_HOST_GID:-0}" \
-  --group-add "${DOCKER_SOCKET_GID:-0}" \
+  "${run_user_args[@]}" \
   -v "$host_root:/repo" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$host_docker_sock:/var/run/docker.sock" \
   -w /repo \
   -e HOME=/tmp/dune-deferred-home \
   -e DUNE_HOST_REPO_ROOT="$host_root" \
@@ -66,6 +92,8 @@ if ! docker run -d --rm --name "$HELPER_NAME" \
   -e DUNE_HOST_UID="${DUNE_HOST_UID:-0}" \
   -e DUNE_HOST_GID="${DUNE_HOST_GID:-0}" \
   -e DOCKER_SOCKET_GID="${DOCKER_SOCKET_GID:-0}" \
+  -e DUNE_ROOTLESS_PODMAN="${DUNE_ROOTLESS_PODMAN:-$is_rootless_podman}" \
+  -e DUNE_DOCKER_SOCKET="$host_docker_sock" \
   -e COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-}" \
   -e DUNE_COMPOSE_PROJECT_NAME="${DUNE_COMPOSE_PROJECT_NAME:-}" \
   --entrypoint bash \

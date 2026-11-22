@@ -4,10 +4,14 @@ services:
       context: ./orchestrator
     image: dune-orchestrator:dev
     container_name: dune-orchestrator
+    labels:
+      com.docker.compose.oneoff: "False"
     restart: unless-stopped
+    userns_mode: "keep-id"
+    user: "0:0"
     network_mode: host
     group_add:
-      - "${DOCKER_SOCKET_GID:-0}"
+      - "${DOCKER_SOCKET_GID:-1000}"
     environment:
       SERVER_IP: "${SERVER_IP}"
       SERVER_TITLE: "${SERVER_TITLE}"
@@ -18,7 +22,7 @@ services:
       DUNE_STEAM_DIR: "/srv/dune/steam"
       DUNE_GENERATED_DIR: "/srv/dune/generated"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - "${DUNE_DOCKER_SOCKET:-/run/user/1000/podman/podman.sock}:/var/run/docker.sock"
       - dune-server:/srv/dune/server
       - dune-steam:/srv/dune/steam
       - dune-cache:/srv/dune/cache
@@ -37,7 +41,6 @@ services:
       driver: json-file
       options:
         max-size: "${DUNE_DOCKER_LOG_MAX_SIZE:-50m}"
-        max-file: "${DUNE_DOCKER_LOG_MAX_FILES:-3}"
 
 volumes:
   dune-server:

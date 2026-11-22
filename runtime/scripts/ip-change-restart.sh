@@ -104,12 +104,18 @@ docker_helper_image() {
 }
 
 can_manage_systemd_units() {
-  [ -d /etc/systemd/system ] && [ -w /etc/systemd/system ]
+  mkdir -p /home/tboutin/.config/systemd/user 2>/dev/null && [ -d /home/tboutin/.config/systemd/user ] && [ -w /home/tboutin/.config/systemd/user ]
 }
 
 can_manage_host_systemd_with_docker() {
   command -v docker >/dev/null 2>&1 || return 1
-  [ -S /var/run/docker.sock ] || return 1
+  local sock="/run/user/${DUNE_HOST_UID:-$(id -u)}/podman/podman.sock"
+  if [ -n "${DUNE_DOCKER_SOCKET:-}" ] && [ -S "${DUNE_DOCKER_SOCKET}" ]; then
+    sock="${DUNE_DOCKER_SOCKET}"
+  elif [ ! -S "$sock" ]; then
+    sock="/var/run/docker.sock"
+  fi
+  [ -S "$sock" ] || return 1
   docker image inspect "$(docker_helper_image)" >/dev/null 2>&1 || return 1
 }
 
@@ -122,13 +128,11 @@ write_units_to() {
   cat > "$systemd_dir/$SERVICE_NAME" <<EOF
 [Unit]
 Description=Dune Awakening public IP change restart monitor
-Wants=docker.service
-After=network-online.target docker.service
+Wants=podman.socket
+After=podman.socket
 
 [Service]
 Type=oneshot
-User=$HOST_SERVICE_UID
-Group=$HOST_SERVICE_GID
 WorkingDirectory=$exec_root
 ExecStart=$exec_root/runtime/scripts/ip-change-restart.sh check-now
 EOF
@@ -165,18 +169,16 @@ install_units_via_docker_host() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      systemd_dir=/host/etc/systemd/system
+      systemd_dir=/host/home/tboutin/.config/systemd/user
       mkdir -p "$systemd_dir"
       cat > "$systemd_dir/dune-awakening-ip-change-restart.service" <<EOF
 [Unit]
 Description=Dune Awakening public IP change restart monitor
-Wants=docker.service
-After=network-online.target docker.service
+Wants=podman.socket
+After=podman.socket
 
 [Service]
 Type=oneshot
-User=${DUNE_HOST_UID}
-Group=${DUNE_HOST_GID}
 WorkingDirectory=${DUNE_HOST_REPO_ROOT}
 ExecStart=${DUNE_HOST_REPO_ROOT}/runtime/scripts/ip-change-restart.sh check-now
 EOF
@@ -195,9 +197,9 @@ Unit=dune-awakening-ip-change-restart.service
 [Install]
 WantedBy=timers.target
 EOF
-      chroot /host /bin/systemctl daemon-reload
-      chroot /host /bin/systemctl enable dune-awakening-ip-change-restart.timer
-      chroot /host /bin/systemctl restart dune-awakening-ip-change-restart.timer
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user enable dune-awakening-ip-change-restart.timer
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user restart dune-awakening-ip-change-restart.timer
     '
 }
 
@@ -211,19 +213,19 @@ disable_units_via_docker_host() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      chroot /host /bin/systemctl disable --now dune-awakening-ip-change-restart.timer >/dev/null 2>&1 || true
-      chroot /host /bin/systemctl daemon-reload
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user disable --now dune-awakening-ip-change-restart.timer >/dev/null 2>&1 || true
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
     '
 }
 
 timer_status() {
   if command -v systemctl >/dev/null 2>&1; then
-    if systemctl list-unit-files "$TIMER_NAME" --no-legend --no-pager 2>/dev/null | grep -q "^$TIMER_NAME"; then
-      systemctl is-active "$TIMER_NAME" 2>/dev/null || true
+    if env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user list-unit-files "$TIMER_NAME" --no-legend --no-pager 2>/dev/null | grep -q "^$TIMER_NAME"; then
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user is-active "$TIMER_NAME" 2>/dev/null || true
       return 0
     fi
-    if systemctl status "$TIMER_NAME" --no-pager >/dev/null 2>&1; then
-      systemctl is-active "$TIMER_NAME" 2>/dev/null || true
+    if env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user status "$TIMER_NAME" --no-pager >/dev/null 2>&1; then
+      env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user is-active "$TIMER_NAME" 2>/dev/null || true
       return 0
     fi
   fi
@@ -240,8 +242,8 @@ show_host_timer_status_via_docker() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      if chroot /host /bin/systemctl list-unit-files dune-awakening-ip-change-restart.timer --no-legend --no-pager 2>/dev/null | grep -q "^dune-awakening-ip-change-restart.timer"; then
-        chroot /host /bin/systemctl is-active dune-awakening-ip-change-restart.timer 2>/dev/null || true
+      if env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user list-unit-files dune-awakening-ip-change-restart.timer --no-legend --no-pager 2>/dev/null | grep -q "^dune-awakening-ip-change-restart.timer"; then
+        env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user is-active dune-awakening-ip-change-restart.timer 2>/dev/null || true
       else
         echo "not installed"
       fi
@@ -342,10 +344,10 @@ enable_monitor() {
   fi
 
   if command -v systemctl >/dev/null 2>&1 && can_manage_systemd_units; then
-    write_units_to "$interval_minutes" "/etc/systemd/system" "$HOST_ROOT_DIR"
-    systemctl daemon-reload
-    systemctl enable "$TIMER_NAME"
-    systemctl restart "$TIMER_NAME"
+    write_units_to "$interval_minutes" "/home/tboutin/.config/systemd/user" "$HOST_ROOT_DIR"
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user enable "$TIMER_NAME"
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user restart "$TIMER_NAME"
     write_state 1 "$interval_minutes" "$notify_minutes" "$baseline" "$(now_stamp)" "${DUNE_IP_CHANGE_RESTART_LAST_RESTART:-}" 1
   elif install_units_via_docker_host "$interval_minutes"; then
     write_state 1 "$interval_minutes" "$notify_minutes" "$baseline" "$(now_stamp)" "${DUNE_IP_CHANGE_RESTART_LAST_RESTART:-}" 1
@@ -368,8 +370,8 @@ enable_monitor() {
 disable_monitor() {
   read_state
   if command -v systemctl >/dev/null 2>&1 && can_manage_systemd_units; then
-    systemctl disable --now "$TIMER_NAME" >/dev/null 2>&1 || true
-    systemctl daemon-reload
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user disable --now "$TIMER_NAME" >/dev/null 2>&1 || true
+    env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
     write_state 0 "${DUNE_IP_CHANGE_RESTART_INTERVAL_MINUTES:-5}" "${DUNE_IP_CHANGE_RESTART_NOTIFY_MINUTES:-1}" "${DUNE_IP_CHANGE_RESTART_LAST_IP:-}" "${DUNE_IP_CHANGE_RESTART_LAST_CHECK:-}" "${DUNE_IP_CHANGE_RESTART_LAST_RESTART:-}" 1
   elif can_manage_host_systemd_with_docker; then
     disable_units_via_docker_host

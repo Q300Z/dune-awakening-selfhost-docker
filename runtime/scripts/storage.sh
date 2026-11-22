@@ -200,7 +200,7 @@ storage_diagnostics() {
   local rows candidates count cache bytes image_reclaim image_estimate=""
   rows="$(docker system df --format '{{.Type}}|{{.Reclaimable}}')" || return 1
   cache="$(awk -F'|' '$1 == "Build Cache" { print $2; exit }' <<<"$rows")"
-  [ -n "$cache" ] || return 1
+  [ -n "$cache" ] || cache="0B (0%)" 
   bytes="$(docker_size_bytes <<<"$cache")"
   [ -n "$bytes" ] || return 1
   candidates="$(obsolete_dune_image_ids unused)" || return 1

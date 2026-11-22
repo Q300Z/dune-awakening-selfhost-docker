@@ -10,6 +10,7 @@ fi
 
 [ -f .env ] && . ./.env
 source runtime/scripts/host-paths.sh
+[ -r runtime/scripts/runtime-env.sh ] && source runtime/scripts/runtime-env.sh
 
 CONTAINER_NAME="dune-autoscaler"
 IMAGE="dune-orchestrator:dev"
@@ -28,8 +29,10 @@ if [ "$HOST_GID" = "0" ] && [ "$REPO_GID" != "0" ]; then
   HOST_GID="$REPO_GID"
 fi
 
-if [ -z "$DOCKER_SOCK_GID" ] && [ -S /var/run/docker.sock ]; then
-  DOCKER_SOCK_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)"
+DOCKER_SOCK_PATH="$(dune_docker_socket_path)"
+HOST_DOCKER_SOCK="${DUNE_DOCKER_SOCKET:-$DOCKER_SOCK_PATH}"
+if [ -z "$DOCKER_SOCK_GID" ] && [ -S "$DOCKER_SOCK_PATH" ]; then
+  DOCKER_SOCK_GID="$(stat -c '%g' "$DOCKER_SOCK_PATH" 2>/dev/null || true)"
 fi
 
 mkdir -p runtime/generated runtime/logs
@@ -68,7 +71,11 @@ fi
 # every consumer treats as "use the default".
 echo "Starting autoscaler container..."
 group_args=()
-if [ -n "$DOCKER_SOCK_GID" ]; then
+RUN_USER="${HOST_UID}:${HOST_GID}"
+if dune_is_rootless_podman; then
+  # En Podman rootless via socket REST, 0:0 correspond à l'UID hôte (tboutin).
+  RUN_USER="0:0"
+elif [ -n "$DOCKER_SOCK_GID" ]; then
   group_args+=(--group-add "$DOCKER_SOCK_GID")
 fi
 
@@ -77,18 +84,20 @@ docker run -d \
   --name "$CONTAINER_NAME" \
   --network host \
   --restart unless-stopped \
-  --user "${HOST_UID}:${HOST_GID}" \
+  --user "$RUN_USER" \
   "${group_args[@]}" \
   --entrypoint bash \
   -e "DUNE_CONTAINER_REPO_ROOT=$AUTOSCALER_CONTAINER_REPO_ROOT" \
   -e "DUNE_HOST_REPO_ROOT=$HOST_REPO_ROOT" \
+  -e "DUNE_ROOTLESS_PODMAN=${DUNE_ROOTLESS_PODMAN:-0}" \
+  -e "DUNE_DOCKER_SOCKET=$HOST_DOCKER_SOCK" \
   -e "DUNE_AUTOSCALER_INTERVAL=${DUNE_AUTOSCALER_INTERVAL:-}" \
   -e "DUNE_AUTOSCALER_DEMAND_INTERVAL=${DUNE_AUTOSCALER_DEMAND_INTERVAL:-}" \
   -e "DUNE_AUTOSCALER_CHAT_EXCHANGE_REPAIR_SECONDS=${DUNE_AUTOSCALER_CHAT_EXCHANGE_REPAIR_SECONDS:-}" \
   -e "DUNE_AUTOSCALER_CHAT_EXCHANGE_REPAIR_TIMEOUT_SECONDS=${DUNE_AUTOSCALER_CHAT_EXCHANGE_REPAIR_TIMEOUT_SECONDS:-}" \
   -e "POSTGRES_PORT=${POSTGRES_PORT:-}" \
   -e "DUNE_PSQL_TRANSPORT=${DUNE_PSQL_TRANSPORT:-}" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$HOST_DOCKER_SOCK:/var/run/docker.sock" \
   -v "$HOST_REPO_ROOT:$AUTOSCALER_CONTAINER_REPO_ROOT" \
   -w "$AUTOSCALER_CONTAINER_REPO_ROOT" \
   "$IMAGE" \

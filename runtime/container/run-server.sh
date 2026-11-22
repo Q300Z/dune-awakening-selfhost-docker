@@ -25,6 +25,7 @@ main() {
 
     mkdir -p /home/dune/server/DuneSandbox/Saved/UserSettings
     chown -R dune:nogroup /home/dune/server/DuneSandbox/Saved
+    chmod -R a+rwX /home/dune/server/DuneSandbox/Saved/UserSettings /home/dune/server/DuneSandbox/Saved/Config 2>/dev/null || true
 
     mkdir -p "/home/dune/.config/Epic/Unreal Engine/Engine"
     config_path="/home/dune/.config/Epic/Unreal Engine/Engine/Config"
@@ -99,7 +100,7 @@ main() {
 
     if [ "${DUNE_ENABLE_CONTAINER_SSH:-1}" = "1" ]; then
         sed -i "s/#Port 22/Port ${ssh}/g" /etc/ssh/sshd_config
-        service ssh start >/dev/null
+        service ssh start >/dev/null || true
     fi
 
     amend_kubernetes_metadata "$pid" "${ports[0]}" "${ports[1]}" "$ssh"

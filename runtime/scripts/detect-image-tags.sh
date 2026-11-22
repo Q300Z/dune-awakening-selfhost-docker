@@ -10,7 +10,7 @@ if [ "${1:-}" = "--from-bundle" ]; then
   # socket are available. Keep existing tags intact on any validation failure.
   tags_tmp="$(mktemp runtime/generated/image-tags.env.tmp.XXXXXX)"
   trap 'rm -f -- "$tags_tmp"' EXIT
-  docker compose exec -T orchestrator python3 - \
+  docker exec -i dune-orchestrator python3 - \
     < runtime/scripts/verify-game-images.py > "$tags_tmp"
   [ -s "$tags_tmp" ] || { echo "Verified image tags are empty." >&2; exit 1; }
   chmod 644 "$tags_tmp"

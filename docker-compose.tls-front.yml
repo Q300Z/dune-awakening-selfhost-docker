@@ -13,6 +13,7 @@ services:
     # Host networking: reaches the Console on the host's loopback and listens on
     # DUNE_TLS_FRONT_BIND:DUNE_TLS_FRONT_PORT.
     network_mode: host
+    userns_mode: "keep-id"
     user: "${DUNE_HOST_UID:-1000}:${DUNE_HOST_GID:-1000}"
     environment:
       MV_TLS_ADDR: "${DUNE_TLS_FRONT_BIND:-0.0.0.0}:${DUNE_TLS_FRONT_PORT:-8797}"
@@ -36,4 +37,3 @@ services:
       driver: json-file
       options:
         max-size: "${DUNE_DOCKER_LOG_MAX_SIZE:-20m}"
-        max-file: "${DUNE_DOCKER_LOG_MAX_FILES:-3}"

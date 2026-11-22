@@ -467,7 +467,7 @@ case "${1:-start}" in
     fi
     stop_loop_processes
     prepare_runtime_generated_files
-    setsid "$0" loop >>"$LOG_FILE" 2>&1 </dev/null &
+    setsid "$0" loop >>"$LOG_FILE" 2>&1 </dev/null 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
     echo $! >"$PID_FILE"
     ;;
   loop)

@@ -17,10 +17,12 @@ custom_settings_dir="runtime/game/$safe_name/Saved/Config/LinuxServer"
 # This is the normal path. It avoids starting a helper container for every
 # dynamic-map launch when ownership has not drifted.
 if mkdir -p "$settings_dir" "$custom_settings_dir" 2>/dev/null \
-  && [ -w "$settings_dir" ] && [ -w "$custom_settings_dir" ]; then
+  && [ -w "$settings_dir" ] && [ -w "$custom_settings_dir" ] \
+  && [ -z "$(find "$settings_dir" "$custom_settings_dir" \( ! -readable -o ! -writable \) -print -quit 2>/dev/null)" ]; then
   exit 0
 fi
 
+[ -r "$ROOT_DIR/.env" ] && { set -a; . "$ROOT_DIR/.env"; set +a; }
 source "$SCRIPT_ROOT/runtime/scripts/host-paths.sh"
 source "$SCRIPT_ROOT/runtime/scripts/host-file-ownership.sh"
 
@@ -45,12 +47,34 @@ echo "Repairing dynamic-map settings ownership: $safe_name"
 
 # Mount only runtime/game and alter only the selected, currently stopped map's
 # host-managed settings chain. Other Saved data and other maps are untouched.
+is_rootless_podman=0
+if [ "${DUNE_ROOTLESS_PODMAN:-}" = "1" ]; then
+  is_rootless_podman=1
+elif [ "${DUNE_ROOTLESS_PODMAN:-}" = "0" ]; then
+  is_rootless_podman=0
+elif [ -f /run/.containerenv ] && grep -q '^rootless=1' /run/.containerenv 2>/dev/null; then
+  is_rootless_podman=1
+elif command -v podman >/dev/null 2>&1; then
+  _docker_bin="$(command -v docker 2>/dev/null || true)"
+  if [ -n "$_docker_bin" ] && grep -q '/usr/bin/podman' "$_docker_bin" 2>/dev/null; then
+    if podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null | grep -qx 'true'; then
+      is_rootless_podman=1
+    fi
+  fi
+fi
+chown_uid="$target_uid"
+chown_gid="$target_gid"
+if [ "$is_rootless_podman" = "1" ]; then
+  chown_uid=0
+  chown_gid=0
+fi
+
 docker run --rm \
   --user 0:0 \
   --entrypoint sh \
   -e "SAFE_NAME=$safe_name" \
-  -e "TARGET_UID=$target_uid" \
-  -e "TARGET_GID=$target_gid" \
+  -e "TARGET_UID=$chown_uid" \
+  -e "TARGET_GID=$chown_gid" \
   -v "$host_game_root:/game" \
   "$helper_image" -c '
     set -eu

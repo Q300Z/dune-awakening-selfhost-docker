@@ -81,24 +81,51 @@ CONTROL_PATHS=(
 
 path_list="$(printf '%s\n' "${CONTROL_PATHS[@]}")"
 
+is_rootless_podman=0
+if [ "${DUNE_ROOTLESS_PODMAN:-}" = "1" ]; then
+  is_rootless_podman=1
+elif [ "${DUNE_ROOTLESS_PODMAN:-}" = "0" ]; then
+  is_rootless_podman=0
+elif [ -f /run/.containerenv ] && grep -q '^rootless=1' /run/.containerenv 2>/dev/null; then
+  is_rootless_podman=1
+elif command -v podman >/dev/null 2>&1; then
+  _docker_bin="$(command -v docker 2>/dev/null || true)"
+  if [ -n "$_docker_bin" ] && grep -q '/usr/bin/podman' "$_docker_bin" 2>/dev/null; then
+    if podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null | grep -qx 'true'; then
+      is_rootless_podman=1
+    fi
+  fi
+fi
+CHOWN_UID="$TARGET_UID"
+CHOWN_GID="$TARGET_GID"
+WRITE_TEST_USER="$TARGET_UID:$TARGET_GID"
+if [ "$is_rootless_podman" = "1" ]; then
+  # Dans Podman rootless (--user 0:0), 0:0 dans le conteneur mappe vers l'UID hôte 1000.
+  CHOWN_UID=0
+  CHOWN_GID=0
+  WRITE_TEST_USER="0:0"
+fi
+
 docker run --rm \
   --user 0:0 \
   --entrypoint bash \
   -e "TARGET_UID=$TARGET_UID" \
   -e "TARGET_GID=$TARGET_GID" \
+  -e "CHOWN_UID=$CHOWN_UID" \
+  -e "CHOWN_GID=$CHOWN_GID" \
   -e "CONTROL_PATHS=$path_list" \
   -v "$HOST_ROOT:/repo" \
   -w /repo \
   "$IMAGE" -lc '
     set -euo pipefail
     mkdir -p runtime/generated runtime/logs runtime/text-router
-    chown "$TARGET_UID:$TARGET_GID" runtime
+    chown "$CHOWN_UID:$CHOWN_GID" runtime
     chmod u+rwx runtime
     while IFS= read -r path; do
       [ -n "$path" ] || continue
       [ -e "$path" ] || continue
-      find "$path" -xdev \( ! -uid "$TARGET_UID" -o ! -gid "$TARGET_GID" \) \
-        -exec chown -h "$TARGET_UID:$TARGET_GID" {} +
+      find "$path" -xdev \( ! -uid "$CHOWN_UID" -o ! -gid "$CHOWN_GID" \) \
+        -exec chown -h "$CHOWN_UID:$CHOWN_GID" {} +
       if [ -d "$path" ]; then
         find "$path" -xdev -type d ! -perm -u+rwx -exec chmod u+rwx {} +
         find "$path" -xdev -type f ! -perm -u+rw -exec chmod u+rw {} +
@@ -110,17 +137,17 @@ docker run --rm \
     # Game processes own most Saved content. Repair only the host-managed
     # directory chain and generated UserSettings files needed by launch scripts.
     if [ -d runtime/game ]; then
-      chown "$TARGET_UID:$TARGET_GID" runtime/game
+      chown "$CHOWN_UID:$CHOWN_GID" runtime/game
       chmod u+rwx runtime/game
       for path in runtime/game/artifacts runtime/game/* runtime/game/*/Saved; do
         [ -e "$path" ] || continue
-        chown "$TARGET_UID:$TARGET_GID" "$path"
+        chown "$CHOWN_UID:$CHOWN_GID" "$path"
         [ ! -d "$path" ] || chmod u+rwx "$path"
       done
       for path in runtime/game/*/Saved/UserSettings runtime/game/*/Saved/Config/LinuxServer; do
         [ -e "$path" ] || continue
-        find "$path" -xdev \( ! -uid "$TARGET_UID" -o ! -gid "$TARGET_GID" \) \
-          -exec chown -h "$TARGET_UID:$TARGET_GID" {} +
+        find "$path" -xdev \( ! -uid "$CHOWN_UID" -o ! -gid "$CHOWN_GID" \) \
+          -exec chown -h "$CHOWN_UID:$CHOWN_GID" {} +
         find "$path" -xdev -type d ! -perm -u+rwx -exec chmod u+rwx {} +
         find "$path" -xdev -type f ! -perm -u+rw -exec chmod u+rw {} +
       done
@@ -150,7 +177,7 @@ docker run --rm \
       [ "$saw_uid" = "1" ] || printf "DUNE_HOST_UID=%s\n" "$TARGET_UID" >> "$env_tmp"
       [ "$saw_gid" = "1" ] || printf "DUNE_HOST_GID=%s\n" "$TARGET_GID" >> "$env_tmp"
       chmod --reference=.env "$env_tmp"
-      chown "$TARGET_UID:$TARGET_GID" "$env_tmp"
+      chown "$CHOWN_UID:$CHOWN_GID" "$env_tmp"
       mv -f -- "$env_tmp" .env
     fi
   '
@@ -185,7 +212,7 @@ if [ -n "$ownership_mismatch" ]; then
 fi
 
 docker run --rm \
-  --user "$TARGET_UID:$TARGET_GID" \
+  --user "$WRITE_TEST_USER" \
   --entrypoint bash \
   -e "CONTROL_PATHS=$path_list" \
   -v "$HOST_ROOT:/repo" \

@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-[ -f .env ] && . ./.env
+[ -r .env ] && { set -a; . ./.env; set +a; }
 [ -r runtime/generated/battlegroup.env ] && . runtime/generated/battlegroup.env
 
 [ -r runtime/generated/image-tags.env ] && . runtime/generated/image-tags.env
@@ -126,6 +126,7 @@ docker run -d \
   -e "BATTLEGROUP_TITLE=$SERVER_TITLE" \
   -e "FC_CRASHREPORTER_LOGS=/home/dune/server/DuneSandbox/Saved/CrashReporterLogs" \
   -e "FuncomLiveServices__RmqTlsEnabled=true" \
+  -e "DUNE_ENABLE_CONTAINER_SSH=${DUNE_ENABLE_CONTAINER_SSH:-1}" \
   "${SIETCH_LOGIN_PASSWORD_ARGS[@]}" \
   "$IMAGE" \
   /opt/dune-local/run-server.sh \

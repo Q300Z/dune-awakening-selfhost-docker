@@ -40,8 +40,10 @@ if [ "${DUNE_CORIOLIS_COORDINATOR_ENABLED:-1}" = "0" ]; then
 fi
 if [ "$HOST_UID" = "0" ] && [ "$REPO_UID" != "0" ]; then HOST_UID="$REPO_UID"; fi
 if [ "$HOST_GID" = "0" ] && [ "$REPO_GID" != "0" ]; then HOST_GID="$REPO_GID"; fi
-if [ -z "$DOCKER_SOCK_GID" ] && [ -S /var/run/docker.sock ]; then
-  DOCKER_SOCK_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)"
+DOCKER_SOCK_PATH="$(dune_docker_socket_path)"
+HOST_DOCKER_SOCK="${DUNE_DOCKER_SOCKET:-$DOCKER_SOCK_PATH}"
+if [ -z "$DOCKER_SOCK_GID" ] && [ -S "$DOCKER_SOCK_PATH" ]; then
+  DOCKER_SOCK_GID="$(stat -c '%g' "$DOCKER_SOCK_PATH" 2>/dev/null || true)"
 fi
 
 mkdir -p runtime/generated runtime/logs
@@ -60,25 +62,32 @@ docker image inspect "$IMAGE" >/dev/null 2>&1 || {
 }
 
 group_args=()
-if [ -n "$DOCKER_SOCK_GID" ]; then group_args+=(--group-add "$DOCKER_SOCK_GID"); fi
+RUN_USER="${HOST_UID}:${HOST_GID}"
+if dune_is_rootless_podman; then
+  RUN_USER="0:0"
+elif [ -n "$DOCKER_SOCK_GID" ]; then
+  group_args+=(--group-add "$DOCKER_SOCK_GID")
+fi
 
 docker run -d \
   "${DUNE_DOCKER_LOG_ARGS[@]}" \
   --name "$CONTAINER_NAME" \
   --network host \
   --restart unless-stopped \
-  --user "${HOST_UID}:${HOST_GID}" \
+  --user "$RUN_USER" \
   "${group_args[@]}" \
   --entrypoint bash \
   -e "DUNE_CONTAINER_REPO_ROOT=$CONTAINER_REPO_ROOT" \
   -e "DUNE_HOST_REPO_ROOT=$HOST_REPO_ROOT" \
   -e "DUNE_HOST_UID=$HOST_UID" \
   -e "DUNE_HOST_GID=$HOST_GID" \
+  -e "DUNE_ROOTLESS_PODMAN=${DUNE_ROOTLESS_PODMAN:-0}" \
+  -e "DUNE_DOCKER_SOCKET=$HOST_DOCKER_SOCK" \
   -e "DUNE_CORIOLIS_SAFE_DATA_CLEANUP=${DUNE_CORIOLIS_SAFE_DATA_CLEANUP:-1}" \
   -e "POSTGRES_PORT=${POSTGRES_PORT:-}" \
   -e "DUNE_PSQL_TRANSPORT=${DUNE_PSQL_TRANSPORT:-}" \
   -e DUNE_RUNTIME_PERMISSIONS_REPAIRED=1 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$HOST_DOCKER_SOCK:/var/run/docker.sock" \
   -v "$HOST_REPO_ROOT:$CONTAINER_REPO_ROOT" \
   -w "$CONTAINER_REPO_ROOT" \
   "$IMAGE" \

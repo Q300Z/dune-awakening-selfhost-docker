@@ -65,7 +65,7 @@ steam_build_id() {
 
   orchestrator_container="$(dune_compose_running_service_container "$DUNE_COMPOSE_PROJECT_NAME" orchestrator 2>/dev/null || true)"
   if [ -n "$orchestrator_container" ]; then
-    docker compose exec -T orchestrator sh -lc "cat /srv/dune/server/steamapps/appmanifest_${app_id}.acf 2>/dev/null" > "$manifest" 2>/dev/null || true
+    docker exec -i dune-orchestrator sh -lc "cat /srv/dune/server/steamapps/appmanifest_${app_id}.acf 2>/dev/null" > "$manifest" 2>/dev/null || true
     if [ -s "$manifest" ]; then
       awk '/"buildid"/ { gsub(/"/, "", $2); print $2; exit }' "$manifest"
       rm -f "$manifest"

@@ -234,7 +234,7 @@ restart_loop() {
   : > "$LOG_FILE"
   ln -sfn "$(basename "$LOG_FILE")" "$CURRENT_LOG_FILE" 2>/dev/null || true
   if command -v setsid >/dev/null 2>&1; then
-    setsid -f bash "$SCRIPT_PATH" loop </dev/null >>"$LOG_FILE" 2>&1
+    setsid -f bash "$SCRIPT_PATH" loop </dev/null >>"$LOG_FILE" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&-
     echo "Started Spice Field override reconciler."
   else
     nohup bash "$SCRIPT_PATH" loop </dev/null >>"$LOG_FILE" 2>&1 &

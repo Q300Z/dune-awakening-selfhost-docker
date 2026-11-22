@@ -134,6 +134,7 @@ container_logs() {
   # current attempt can establish listeners, readiness or a startup failure.
   started_at="$(docker_timeout docker inspect -f '{{.State.StartedAt}}' "$container" 2>/dev/null)" || return 0
   [ -n "$started_at" ] || return 0
+  started_at="$(date -u -d "${started_at% [A-Z]*}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$started_at")" 
   docker_timeout docker logs --since "$started_at" --tail "$log_tail_lines" "$container" 2>&1 || true
 }
 

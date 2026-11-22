@@ -223,15 +223,15 @@ check_project_systemd_timers() {
   auto_wait_empty="$(config_value runtime/generated/update-auto.env DUNE_AUTO_UPDATE_WAIT_EMPTY || true)"
   auto_max_wait="$(config_value runtime/generated/update-auto.env DUNE_AUTO_UPDATE_MAX_WAIT_MINUTES || true)"
   while IFS='|' read -r timer service label; do
-    load_state="$(systemctl show "$timer" --property=LoadState --value 2>/dev/null || true)"
+    load_state="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show "$timer" --property=LoadState --value 2>/dev/null || true)"
     if [ -z "$load_state" ] || [ "$load_state" = "not-found" ]; then
       continue
     fi
     installed=$((installed + 1))
-    active_state="$(systemctl is-active "$timer" 2>/dev/null || true)"
-    enabled_state="$(systemctl is-enabled "$timer" 2>/dev/null || true)"
-    working_directory="$(systemctl show "$service" --property=WorkingDirectory --value 2>/dev/null || true)"
-    exec_start="$(systemctl show "$service" --property=ExecStart --value 2>/dev/null || true)"
+    active_state="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user is-active "$timer" 2>/dev/null || true)"
+    enabled_state="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user is-enabled "$timer" 2>/dev/null || true)"
+    working_directory="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show "$service" --property=WorkingDirectory --value 2>/dev/null || true)"
+    exec_start="$(env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show "$service" --property=ExecStart --value 2>/dev/null || true)"
 
     if [ "$timer" = "dune-awakening-auto-update.timer" ] \
       && [ "$active_state" = "active" ] \
@@ -403,7 +403,7 @@ app_id="$(config_value .env STEAM_APP_ID || true)"
 app_id="${app_id:-${STEAM_APP_ID:-4754530}}"
 orchestrator_container="$(dune_compose_running_service_container "$DUNE_COMPOSE_PROJECT_NAME" orchestrator 2>/dev/null || true)"
 if [ -n "$orchestrator_container" ] && is_running "$orchestrator_container"; then
-  if docker compose exec -T orchestrator test -f "/srv/dune/server/steamapps/appmanifest_${app_id}.acf" 2>/dev/null; then
+  if docker exec -i dune-orchestrator test -f "/srv/dune/server/steamapps/appmanifest_${app_id}.acf" 2>/dev/null; then
     ok "Steam appmanifest found for app $app_id"
   else
     fail_msg "Steam appmanifest not found for app $app_id"

@@ -7,14 +7,16 @@ services:
       dockerfile: console/api/Dockerfile
     image: redblink-dune-docker-console:dev
     container_name: redblink-dune-docker-console
+    labels:
+      com.docker.compose.oneoff: "False"
     restart: unless-stopped
     logging:
       driver: json-file
       options:
         max-size: "${DUNE_DOCKER_LOG_MAX_SIZE:-50m}"
-        max-file: "${DUNE_DOCKER_LOG_MAX_FILES:-3}"
     init: true
-    user: "${DUNE_HOST_UID:-0}:${DUNE_HOST_GID:-0}"
+    userns_mode: "keep-id"
+    user: "${DUNE_HOST_UID:-1000}:${DUNE_HOST_GID:-1000}"
     # Host networking lets the console reach local Dune services and bind
     # ADMIN_BIND_PORT directly.
     network_mode: host
@@ -24,15 +26,18 @@ services:
     security_opt:
       - label=disable
     group_add:
-      - "${DOCKER_SOCKET_GID:-0}"
+      - "${DOCKER_SOCKET_GID:-1000}"
     environment:
       # Numeric host UIDs do not always have a passwd entry in the image.
       # Keep Docker CLI state out of / so deployment works for every host UID.
       HOME: /tmp/dune-console-home
       DOCKER_CONFIG: /tmp/dune-console-home/.docker
       DOCKER_HOST: "${DUNE_DOCKER_SOCKET_PROXY_URL:-}"
-      DUNE_HOST_UID: "${DUNE_HOST_UID:-0}"
-      DUNE_HOST_GID: "${DUNE_HOST_GID:-0}"
+      DUNE_HOST_UID: "${DUNE_HOST_UID:-1000}"
+      DUNE_HOST_GID: "${DUNE_HOST_GID:-1000}"
+      DUNE_DOCKER_SOCKET: "${DUNE_DOCKER_SOCKET:-/run/user/1000/podman/podman.sock}"
+      DUNE_ROOTLESS_PODMAN: "${DUNE_ROOTLESS_PODMAN:-0}"
+      PODMAN_COMPOSE_WARNING_LOGS: "${PODMAN_COMPOSE_WARNING_LOGS:-false}"
       DUNE_DOCKER_DIR: /repo
       DUNE_CONTAINER_REPO_ROOT: /repo
       DUNE_HOST_REPO_ROOT: "${DUNE_HOST_REPO_ROOT:-${PWD}}"
@@ -123,7 +128,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
       # WARNING: mounting the Docker socket gives this container broad control
       # over the host Docker daemon. Expose the web admin only to trusted admins.
-      - /var/run/docker.sock:/var/run/docker.sock
+      - "${DUNE_DOCKER_SOCKET:-/run/user/1000/podman/podman.sock}:/var/run/docker.sock"
     healthcheck:
       test: ["CMD", "node", "/app/src/healthcheck.js"]
       interval: 30s
