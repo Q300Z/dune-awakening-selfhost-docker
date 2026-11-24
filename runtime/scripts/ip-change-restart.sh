@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Dossier personnel de l'hôte (pour les unités systemd --user). Dans la
+# console, HOME vaut /tmp/dune-console-home : DUNE_HOST_HOME vient alors de .env.
+DUNE_HOST_HOME="${DUNE_HOST_HOME:-$HOME}"
+DUNE_USER_SYSTEMD_DIR="$DUNE_HOST_HOME/.config/systemd/user"
+
 cd "$(dirname "$0")/../.."
 ROOT_DIR="$(pwd)"
 HOST_ROOT_DIR="${DUNE_HOST_REPO_ROOT:-$ROOT_DIR}"
@@ -104,7 +109,7 @@ docker_helper_image() {
 }
 
 can_manage_systemd_units() {
-  mkdir -p /home/tboutin/.config/systemd/user 2>/dev/null && [ -d /home/tboutin/.config/systemd/user ] && [ -w /home/tboutin/.config/systemd/user ]
+  mkdir -p "$DUNE_USER_SYSTEMD_DIR" 2>/dev/null && [ -d "$DUNE_USER_SYSTEMD_DIR" ] && [ -w "$DUNE_USER_SYSTEMD_DIR" ]
 }
 
 can_manage_host_systemd_with_docker() {
@@ -161,6 +166,7 @@ install_units_via_docker_host() {
 
   can_manage_host_systemd_with_docker || return 1
   docker run --rm --user 0:0 --privileged --pid=host --network=host \
+    -e DUNE_HOST_HOME="$DUNE_HOST_HOME" \
     -e DUNE_IP_CHANGE_RESTART_INTERVAL_MINUTES="$interval_minutes" \
     -e DUNE_HOST_REPO_ROOT="$HOST_ROOT_DIR" \
     -e DUNE_HOST_UID="$HOST_SERVICE_UID" \
@@ -169,7 +175,7 @@ install_units_via_docker_host() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      systemd_dir=/host/home/tboutin/.config/systemd/user
+      systemd_dir=/host${DUNE_HOST_HOME}/.config/systemd/user
       mkdir -p "$systemd_dir"
       cat > "$systemd_dir/dune-awakening-ip-change-restart.service" <<EOF
 [Unit]
@@ -344,7 +350,7 @@ enable_monitor() {
   fi
 
   if command -v systemctl >/dev/null 2>&1 && can_manage_systemd_units; then
-    write_units_to "$interval_minutes" "/home/tboutin/.config/systemd/user" "$HOST_ROOT_DIR"
+    write_units_to "$interval_minutes" "$DUNE_USER_SYSTEMD_DIR" "$HOST_ROOT_DIR"
     env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
     env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user enable "$TIMER_NAME"
     env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user restart "$TIMER_NAME"

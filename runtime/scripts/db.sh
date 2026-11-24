@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Dossier personnel de l'hôte (pour les unités systemd --user). Dans la
+# console, HOME vaut /tmp/dune-console-home : DUNE_HOST_HOME vient alors de .env.
+DUNE_HOST_HOME="${DUNE_HOST_HOME:-$HOME}"
+DUNE_USER_SYSTEMD_DIR="$DUNE_HOST_HOME/.config/systemd/user"
+
 cd "$(dirname "$0")/../.."
 ROOT_DIR="$(pwd)"
 HOST_ROOT_DIR="${DUNE_HOST_REPO_ROOT:-$ROOT_DIR}"
@@ -12,8 +17,8 @@ source runtime/scripts/lib/container-lifecycle.sh 2>/dev/null || dune_container_
 
 BACKUP_DIR_DEFAULT="runtime/backups/db"
 AUTO_STATE_FILE="runtime/generated/db-backup.env"
-AUTO_SERVICE_FILE="/home/tboutin/.config/systemd/user/dune-awakening-db-backup.service"
-AUTO_TIMER_FILE="/home/tboutin/.config/systemd/user/dune-awakening-db-backup.timer"
+AUTO_SERVICE_FILE="$DUNE_USER_SYSTEMD_DIR/dune-awakening-db-backup.service"
+AUTO_TIMER_FILE="$DUNE_USER_SYSTEMD_DIR/dune-awakening-db-backup.timer"
 PENDING_TRANSFER_FILE="runtime/generated/pending-character-transfers.tsv"
 BATTLEGROUP_RESTORE_FILE="runtime/generated/battlegroup-restore-point.env"
 DB_RESTORE_MAINTENANCE_FILE="${DUNE_DB_RESTORE_MAINTENANCE_FILE:-runtime/generated/db-restore-maintenance}"
@@ -257,7 +262,7 @@ dune_schema_table_count() {
 # The console's own admin password is deliberately NOT here: it is the server's
 # credential and moves with it, and the operator knows it because they ran the
 # server the archive came from.
-HOST_SHAPED_ENV_KEYS="DUNE_HOST_REPO_ROOT DUNE_HOST_UID DUNE_HOST_GID DOCKER_SOCKET_GID ADMIN_BIND_PORT DUNE_COMPOSE_PROJECT_NAME COMPOSE_PROJECT_NAME DUNE_DB_PASSWORD SERVER_IP"
+HOST_SHAPED_ENV_KEYS="DUNE_HOST_REPO_ROOT DUNE_HOST_HOME DUNE_HOST_UID DUNE_HOST_GID DOCKER_SOCKET_GID ADMIN_BIND_PORT DUNE_COMPOSE_PROJECT_NAME COMPOSE_PROJECT_NAME DUNE_DB_PASSWORD SERVER_IP"
 HOST_SHAPED_ENV_PREFIXES="DUNE_MEMORY_ DUNE_ALWAYS_ON_"
 
 # Re-applies this host's values over a just-restored .env. Reads them from the
@@ -3668,7 +3673,7 @@ validate_positive_integer() {
 }
 
 can_manage_systemd_units() {
-  mkdir -p /home/tboutin/.config/systemd/user 2>/dev/null && [ -d /home/tboutin/.config/systemd/user ] && [ -w /home/tboutin/.config/systemd/user ]
+  mkdir -p "$DUNE_USER_SYSTEMD_DIR" 2>/dev/null && [ -d "$DUNE_USER_SYSTEMD_DIR" ] && [ -w "$DUNE_USER_SYSTEMD_DIR" ]
 }
 
 docker_helper_image() {
@@ -3787,6 +3792,7 @@ install_auto_units_via_docker_host() {
 
   can_manage_host_systemd_with_docker || return 1
   docker run --rm --user 0:0 --privileged --pid=host --network=host \
+    -e DUNE_HOST_HOME="$DUNE_HOST_HOME" \
     -e DB_AUTO_BACKUP_TIME="$backup_time" \
     -e DB_AUTO_BACKUP_INTERVAL_HOURS="$interval_hours" \
     -e DUNE_HOST_REPO_ROOT="$HOST_ROOT_DIR" \
@@ -3794,7 +3800,7 @@ install_auto_units_via_docker_host() {
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      systemd_dir=/host/home/tboutin/.config/systemd/user
+      systemd_dir=/host${DUNE_HOST_HOME}/.config/systemd/user
       mkdir -p "$systemd_dir"
       cat > "$systemd_dir/dune-awakening-db-backup.service" <<EOF
 [Unit]
@@ -3840,12 +3846,13 @@ disable_auto_units_via_docker_host() {
 
   can_manage_host_systemd_with_docker || return 1
   docker run --rm --user 0:0 --privileged --pid=host --network=host \
+    -e DUNE_HOST_HOME="$DUNE_HOST_HOME" \
     -v /:/host \
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user disable --now dune-awakening-db-backup.timer >/dev/null 2>&1 || true
-      rm -f /host/home/tboutin/.config/systemd/user/dune-awakening-db-backup.service /host/home/tboutin/.config/systemd/user/dune-awakening-db-backup.timer
+      rm -f /host${DUNE_HOST_HOME}/.config/systemd/user/dune-awakening-db-backup.service /host${DUNE_HOST_HOME}/.config/systemd/user/dune-awakening-db-backup.timer
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
     '
 }
@@ -3944,7 +3951,7 @@ auto_backup_enable() {
     return 0
   fi
 
-  write_auto_units_to "$backup_time" "/home/tboutin/.config/systemd/user" "$ROOT_DIR" "$interval_hours"
+  write_auto_units_to "$backup_time" "$DUNE_USER_SYSTEMD_DIR" "$ROOT_DIR" "$interval_hours"
 
   env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
   env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user enable --now dune-awakening-db-backup.timer
@@ -4355,14 +4362,15 @@ system_auto_units() {
 
 install_system_auto_units() {
   if command -v systemctl >/dev/null 2>&1 && can_manage_systemd_units; then
-    printf '%s\n' "$SYSTEM_AUTO_SERVICE_TEXT" > "/home/tboutin/.config/systemd/user/$SYSTEM_AUTO_UNIT.service"
-    printf '%s\n' "$SYSTEM_AUTO_TIMER_TEXT" > "/home/tboutin/.config/systemd/user/$SYSTEM_AUTO_UNIT.timer"
+    printf '%s\n' "$SYSTEM_AUTO_SERVICE_TEXT" > "$DUNE_USER_SYSTEMD_DIR/$SYSTEM_AUTO_UNIT.service"
+    printf '%s\n' "$SYSTEM_AUTO_TIMER_TEXT" > "$DUNE_USER_SYSTEMD_DIR/$SYSTEM_AUTO_UNIT.timer"
     env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
     env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user enable --now "$SYSTEM_AUTO_UNIT.timer"
     return
   fi
   can_manage_host_systemd_with_docker || return 1
   docker run --rm --user 0:0 --privileged --pid=host --network=host \
+    -e DUNE_HOST_HOME="$DUNE_HOST_HOME" \
     -e "UNIT_NAME=$SYSTEM_AUTO_UNIT" \
     -e "SERVICE_TEXT=$SYSTEM_AUTO_SERVICE_TEXT" \
     -e "TIMER_TEXT=$SYSTEM_AUTO_TIMER_TEXT" \
@@ -4370,7 +4378,7 @@ install_system_auto_units() {
     --entrypoint bash \
     "$(docker_helper_image)" -lc '
       set -euo pipefail
-      d=/host/home/tboutin/.config/systemd/user
+      d=/host${DUNE_HOST_HOME}/.config/systemd/user
       mkdir -p "$d"
       printf "%s\n" "$SERVICE_TEXT" > "$d/$UNIT_NAME.service"
       printf "%s\n" "$TIMER_TEXT" > "$d/$UNIT_NAME.timer"
@@ -4382,19 +4390,20 @@ install_system_auto_units() {
 remove_system_auto_units() {
   if command -v systemctl >/dev/null 2>&1 && can_manage_systemd_units; then
     env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user disable --now "$SYSTEM_AUTO_UNIT.timer" >/dev/null 2>&1 || true
-    rm -f "/home/tboutin/.config/systemd/user/$SYSTEM_AUTO_UNIT.service" "/home/tboutin/.config/systemd/user/$SYSTEM_AUTO_UNIT.timer"
+    rm -f "$DUNE_USER_SYSTEMD_DIR/$SYSTEM_AUTO_UNIT.service" "$DUNE_USER_SYSTEMD_DIR/$SYSTEM_AUTO_UNIT.timer"
     env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
     return
   fi
   can_manage_host_systemd_with_docker || return 1
   docker run --rm --user 0:0 --privileged --pid=host --network=host \
+    -e DUNE_HOST_HOME="$DUNE_HOST_HOME" \
     -e "UNIT_NAME=$SYSTEM_AUTO_UNIT" \
     -v /:/host \
     --entrypoint bash \
     "$(docker_helper_image)" -lc '
       set -euo pipefail
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user disable --now "$UNIT_NAME.timer" >/dev/null 2>&1 || true
-      rm -f "/host/home/tboutin/.config/systemd/user/$UNIT_NAME.service" "/host/home/tboutin/.config/systemd/user/$UNIT_NAME.timer"
+      rm -f "/host${DUNE_HOST_HOME}/.config/systemd/user/$UNIT_NAME.service" "/host${DUNE_HOST_HOME}/.config/systemd/user/$UNIT_NAME.timer"
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
     '
 }

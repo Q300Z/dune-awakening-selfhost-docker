@@ -73,7 +73,7 @@ echo "Starting autoscaler container..."
 group_args=()
 RUN_USER="${HOST_UID}:${HOST_GID}"
 if dune_is_rootless_podman; then
-  # En Podman rootless via socket REST, 0:0 correspond à l'UID hôte (tboutin).
+  # En Podman rootless via socket REST, 0:0 correspond à l'UID de l'utilisateur hôte.
   RUN_USER="0:0"
 elif [ -n "$DOCKER_SOCK_GID" ]; then
   group_args+=(--group-add "$DOCKER_SOCK_GID")

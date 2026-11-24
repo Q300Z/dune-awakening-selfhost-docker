@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Dossier personnel de l'hôte (pour les unités systemd --user). Dans la
+# console, HOME vaut /tmp/dune-console-home : DUNE_HOST_HOME vient alors de .env.
+DUNE_HOST_HOME="${DUNE_HOST_HOME:-$HOME}"
+DUNE_USER_SYSTEMD_DIR="$DUNE_HOST_HOME/.config/systemd/user"
+
 cd "$(dirname "$0")/../.."
 ROOT_DIR="$(pwd)"
 HOST_ROOT_DIR="${DUNE_HOST_REPO_ROOT:-$ROOT_DIR}"
 
 STATE_FILE="runtime/generated/shutdown-protection.env"
 SERVICE_NAME="dune-awakening-shutdown-protection.service"
-SERVICE_FILE="/home/tboutin/.config/systemd/user/$SERVICE_NAME"
+SERVICE_FILE="$DUNE_USER_SYSTEMD_DIR/$SERVICE_NAME"
 LOG_FILE="runtime/generated/shutdown-protection.log"
 
 usage() {
@@ -47,7 +52,7 @@ read_state() {
 }
 
 can_manage_systemd_units() {
-  mkdir -p /home/tboutin/.config/systemd/user 2>/dev/null && [ -d /home/tboutin/.config/systemd/user ] && [ -w /home/tboutin/.config/systemd/user ]
+  mkdir -p "$DUNE_USER_SYSTEMD_DIR" 2>/dev/null && [ -d "$DUNE_USER_SYSTEMD_DIR" ] && [ -w "$DUNE_USER_SYSTEMD_DIR" ]
 }
 
 can_write_log() {
@@ -108,7 +113,7 @@ EOF
 }
 
 install_unit() {
-  mkdir -p /home/tboutin/.config/systemd/user
+  mkdir -p "$DUNE_USER_SYSTEMD_DIR"
   unit_content "$HOST_ROOT_DIR" > "$SERVICE_FILE"
 }
 
@@ -118,12 +123,13 @@ install_unit_via_docker_host() {
 
   can_manage_host_systemd_with_docker || return 1
   docker run --rm --user 0:0 --privileged --pid=host --network=host \
+    -e DUNE_HOST_HOME="$DUNE_HOST_HOME" \
     -e DUNE_SHUTDOWN_UNIT_CONTENT="$(unit_content "$HOST_ROOT_DIR")" \
     -v /:/host \
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      systemd_dir=/host/home/tboutin/.config/systemd/user
+      systemd_dir=/host${DUNE_HOST_HOME}/.config/systemd/user
       mkdir -p "$systemd_dir"
       printf "%s\n" "$DUNE_SHUTDOWN_UNIT_CONTENT" > "$systemd_dir/dune-awakening-shutdown-protection.service"
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
@@ -152,12 +158,13 @@ remove_unit_via_docker_host() {
 
   can_manage_host_systemd_with_docker || return 1
   docker run --rm --user 0:0 --privileged --pid=host --network=host \
+    -e DUNE_HOST_HOME="$DUNE_HOST_HOME" \
     -v /:/host \
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user disable --now dune-awakening-shutdown-protection.service >/dev/null 2>&1 || true
-      rm -f /host/home/tboutin/.config/systemd/user/dune-awakening-shutdown-protection.service
+      rm -f /host${DUNE_HOST_HOME}/.config/systemd/user/dune-awakening-shutdown-protection.service
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
     '
 }

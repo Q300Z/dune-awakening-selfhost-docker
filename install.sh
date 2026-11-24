@@ -468,6 +468,7 @@ prepare_docker_socket_gid() {
 persist_console_runtime_env() {
   persist_env_value "DUNE_HOST_REPO_ROOT" "$DUNE_HOST_REPO_ROOT"
   persist_env_value "DUNE_HOST_UID" "$DUNE_HOST_UID"
+  persist_env_value "DUNE_HOST_HOME" "${DUNE_HOST_HOME:-$HOME}"
   persist_env_value "DUNE_HOST_GID" "$DUNE_HOST_GID"
   persist_env_value "DOCKER_SOCKET_GID" "$DOCKER_SOCKET_GID"
 }

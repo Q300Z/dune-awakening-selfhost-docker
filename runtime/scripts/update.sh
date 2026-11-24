@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Dossier personnel de l'hôte (pour les unités systemd --user). Dans la
+# console, HOME vaut /tmp/dune-console-home : DUNE_HOST_HOME vient alors de .env.
+DUNE_HOST_HOME="${DUNE_HOST_HOME:-$HOME}"
+DUNE_USER_SYSTEMD_DIR="$DUNE_HOST_HOME/.config/systemd/user"
+
 cd "$(dirname "$0")/../.."
 ROOT_DIR="$(pwd)"
 HOST_ROOT_DIR="${DUNE_HOST_REPO_ROOT:-$ROOT_DIR}"
@@ -23,8 +28,8 @@ AUTO_STATE_FILE="${DUNE_AUTO_UPDATE_STATE_FILE:-runtime/generated/update-auto.en
 MANUAL_STOP_FILE="runtime/generated/manual-stop.env"
 AUTO_SERVICE_NAME="dune-awakening-auto-update.service"
 AUTO_TIMER_NAME="dune-awakening-auto-update.timer"
-AUTO_SERVICE_FILE="/home/tboutin/.config/systemd/user/$AUTO_SERVICE_NAME"
-AUTO_TIMER_FILE="/home/tboutin/.config/systemd/user/$AUTO_TIMER_NAME"
+AUTO_SERVICE_FILE="$DUNE_USER_SYSTEMD_DIR/$AUTO_SERVICE_NAME"
+AUTO_TIMER_FILE="$DUNE_USER_SYSTEMD_DIR/$AUTO_TIMER_NAME"
 AUTO_DEFAULT_TIME="${DUNE_AUTO_UPDATE_TIME:-05:00}"
 AUTO_DEFAULT_INTERVAL_MINUTES="${DUNE_AUTO_UPDATE_INTERVAL_MINUTES:-60}"
 AUTO_PENDING_FILE="${DUNE_AUTO_UPDATE_PENDING_FILE:-runtime/generated/update-auto-pending.env}"
@@ -299,7 +304,7 @@ require_auto_max_wait_minutes() {
 }
 
 can_manage_systemd_units() {
-  mkdir -p /home/tboutin/.config/systemd/user 2>/dev/null && [ -d /home/tboutin/.config/systemd/user ] && [ -w /home/tboutin/.config/systemd/user ]
+  mkdir -p "$DUNE_USER_SYSTEMD_DIR" 2>/dev/null && [ -d "$DUNE_USER_SYSTEMD_DIR" ] && [ -w "$DUNE_USER_SYSTEMD_DIR" ]
 }
 
 write_auto_units_to() {
@@ -362,13 +367,14 @@ install_auto_units_via_docker_host() {
 
   can_manage_host_systemd_with_docker || return 1
   docker run --rm --user 0:0 --privileged --pid=host --network=host \
+    -e DUNE_HOST_HOME="$DUNE_HOST_HOME" \
     -e DUNE_AUTO_UPDATE_INTERVAL_MINUTES="$interval_minutes" \
     -e DUNE_HOST_REPO_ROOT="$HOST_ROOT_DIR" \
     -v /:/host \
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
-      systemd_dir=/host/home/tboutin/.config/systemd/user
+      systemd_dir=/host${DUNE_HOST_HOME}/.config/systemd/user
       mkdir -p "$systemd_dir"
       cat > "$systemd_dir/dune-awakening-auto-update.service" <<EOF
 [Unit]
@@ -409,13 +415,14 @@ disable_auto_units_via_docker_host() {
 
   can_manage_host_systemd_with_docker || return 1
   docker run --rm --user 0:0 --privileged --pid=host --network=host \
+    -e DUNE_HOST_HOME="$DUNE_HOST_HOME" \
     -v /:/host \
     --entrypoint bash \
     "$image" -lc '
       set -euo pipefail
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user disable --now dune-awakening-auto-update.timer >/dev/null 2>&1 || true
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user stop dune-awakening-auto-update.service >/dev/null 2>&1 || true
-      rm -f /host/home/tboutin/.config/systemd/user/dune-awakening-auto-update.service /host/home/tboutin/.config/systemd/user/dune-awakening-auto-update.timer
+      rm -f /host${DUNE_HOST_HOME}/.config/systemd/user/dune-awakening-auto-update.service /host${DUNE_HOST_HOME}/.config/systemd/user/dune-awakening-auto-update.timer
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user daemon-reload
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus chroot /host /bin/systemctl --user reset-failed dune-awakening-auto-update.service >/dev/null 2>&1 || true
     '
@@ -590,7 +597,7 @@ handle_auto_update() {
         fi
       fi
 
-      write_auto_units_to "$interval_minutes" "/home/tboutin/.config/systemd/user" "$HOST_ROOT_DIR"
+      write_auto_units_to "$interval_minutes" "$DUNE_USER_SYSTEMD_DIR" "$HOST_ROOT_DIR"
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload
       env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user enable --now "$AUTO_TIMER_NAME"
       write_auto_state 1 "$interval_minutes" "$apply_enabled" "$notify_enabled" "$notify_minutes" "$wait_empty" "$max_wait_minutes" 1 "$update_console" "$manage_tanks"
