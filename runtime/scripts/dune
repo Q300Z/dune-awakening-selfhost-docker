@@ -5,7 +5,8 @@ set -euo pipefail
 
 export PODMAN_COMPOSE_WARNING_LOGS="${PODMAN_COMPOSE_WARNING_LOGS:-false}"
 
-cd "$(dirname "$0")/../.."
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+cd "$(dirname "$SCRIPT_PATH")/../.."
 
 # Resolve this before dispatching so every child script and raw Docker Compose
 # command targets the same existing persistent volumes.

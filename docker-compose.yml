@@ -6,7 +6,7 @@ services:
     container_name: dune-orchestrator
     labels:
       com.docker.compose.oneoff: "False"
-    restart: unless-stopped
+    restart: "no"
     userns_mode: "keep-id"
     user: "0:0"
     network_mode: host

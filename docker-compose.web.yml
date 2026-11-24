@@ -9,7 +9,7 @@ services:
     container_name: redblink-dune-docker-console
     labels:
       com.docker.compose.oneoff: "False"
-    restart: unless-stopped
+    restart: "no"
     logging:
       driver: json-file
       options:
